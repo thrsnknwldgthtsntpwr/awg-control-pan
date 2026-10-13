@@ -9,10 +9,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 
 from .validate import valid_client_name
+
+_EXPIRES_ARGV_RE = re.compile(r"^--expires=(\d+)d$")
+_HELPER_CMDS = frozenset({"client-conf", "client-uri", "client-qr", "server-pubkeys", "init-info"})
+_MAX_BATCH = 100
+_MAX_STDOUT = 1 << 20  # 1 MiB: cap untrusted script output before json parse
 
 
 @dataclass
@@ -41,7 +47,10 @@ def _base(manage_script: str) -> list[str]:
 
 def _parse_json_output(stdout: str, rc: int, stderr: str) -> ManageResult:
     """Single JSON-parsing rule: stdout is exactly ONE json document (last line)."""
-    out = (stdout or "").strip()
+    out = (stdout or "")
+    if len(out) > _MAX_STDOUT:
+        out = out[-_MAX_STDOUT:]
+    out = out.strip()
     data = None
     if out:
         try:
@@ -54,14 +63,30 @@ def _parse_json_output(stdout: str, rc: int, stderr: str) -> ManageResult:
     return ManageResult(ok, rc, data, (stderr or "")[-4000:])
 
 
+def _check_batch(names: list[str]) -> None:
+    if len(names) > _MAX_BATCH:
+        raise ValueError(f"too many names (max {_MAX_BATCH})")
+
+
+def _check_expires_flag(flag: str | None) -> None:
+    if flag is None:
+        return
+    m = _EXPIRES_ARGV_RE.match(flag) if isinstance(flag, str) else None
+    if not m:
+        raise ValueError(f"bad expires flag: {flag!r}")
+    if not 1 <= int(m.group(1)) <= 3650:
+        raise ValueError(f"bad expires flag: {flag!r}")
+
+
 def run_manage(manage_script: str, *args: str, timeout: int = 60) -> ManageResult:
     cmd = _base(manage_script) + ["--json", "--no-color"] + list(args)
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run(cmd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=timeout)
     except subprocess.TimeoutExpired:
         return ManageResult(False, 124, None, "timeout manage")
-    except OSError as e:
-        return ManageResult(False, 127, None, str(e))
+    except OSError:
+        return ManageResult(False, 127, None, "cannot run manage script")
     return _parse_json_output(p.stdout, p.returncode, p.stderr)
 
 
@@ -81,6 +106,8 @@ def cmd_add(manage_script: str, names: list[str], expires_flag: str | None) -> M
     for n in names:
         if not valid_client_name(n):
             raise ValueError(f"bad name: {n}")
+    _check_batch(names)
+    _check_expires_flag(expires_flag)
     args = ["--yes"]
     if expires_flag:
         args.append(expires_flag)
@@ -90,11 +117,12 @@ def cmd_add(manage_script: str, names: list[str], expires_flag: str | None) -> M
     # run_manage prepends --json/--no-color itself, so rebuild order here:
     cmd = _base(manage_script) + ["--json", "--no-color"] + args
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        p = subprocess.run(cmd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=120)
     except subprocess.TimeoutExpired:
         return ManageResult(False, 124, None, "timeout add")
-    except OSError as e:
-        return ManageResult(False, 127, None, str(e))
+    except OSError:
+        return ManageResult(False, 127, None, "cannot run manage script")
     return _parse(p)
 
 
@@ -102,13 +130,15 @@ def cmd_remove(manage_script: str, names: list[str]) -> ManageResult:
     for n in names:
         if not valid_client_name(n):
             raise ValueError(f"bad name: {n}")
+    _check_batch(names)
     cmd = _base(manage_script) + ["--json", "--no-color", "--yes", "remove"] + names
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        p = subprocess.run(cmd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=120)
     except subprocess.TimeoutExpired:
         return ManageResult(False, 124, None, "timeout remove")
-    except OSError as e:
-        return ManageResult(False, 127, None, str(e))
+    except OSError:
+        return ManageResult(False, 127, None, "cannot run manage script")
     return _parse(p)
 
 
@@ -116,6 +146,7 @@ def cmd_regen(manage_script: str, names: list[str]) -> ManageResult:
     for n in names:
         if not valid_client_name(n):
             raise ValueError(f"bad name: {n}")
+    _check_batch(names)
     return run_manage(manage_script, "--yes", "regen", *names, timeout=120)
 
 
@@ -129,6 +160,15 @@ def run_helper(helper: str, *args: str, timeout: int = 15) -> tuple[int, bytes, 
     Production runs as root -> direct call. Sudo fallback only for legacy
     awgpanel-user installs / non-root dev.
     """
+    if not args or args[0] not in _HELPER_CMDS:
+        raise ValueError(f"helper cmd not allowed: {args[:1]!r}")
+    cmd_name = args[0]
+    rest = args[1:]
+    if cmd_name in ("client-conf", "client-uri", "client-qr"):
+        if len(rest) != 1 or not valid_client_name(rest[0]):
+            raise ValueError(f"bad helper name: {rest!r}")
+    elif rest:
+        raise ValueError(f"helper {cmd_name} takes no name argument")
     if _is_root():
         cmd = [helper] + list(args)
     else:

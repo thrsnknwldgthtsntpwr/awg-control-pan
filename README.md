@@ -1,5 +1,7 @@
 # awg-panel — веб-интерфейс поверх amneziawg-installer
 
+Версия: **0.1.8**.
+
 Минималистичная вебка в стиле роутера. Underlay — только команды
 `manage_amneziawg.sh` из https://github.com/bivlked/amneziawg-installer
 плюс `/proc` для состояния сервера. Своей БД пользователей VPN нет.
@@ -12,14 +14,19 @@
 - Клиенты: таблица из `manage list --json` + `stats --json` + префиксы ключей
   из `awg0.conf` (колонки как `list --verbose`: имя/IP/ключ/статус/RX-TX/срок).
   Чекбоксы, массовое удаление, кнопки **Добавить / Удалить**.
-  Regen («Пересоздать файлы») — только внутри карточки клиента.
-  Имя — ссылка в карточку: конфиг, `vpn://`, QR, трафик, handshake, срок.
-- Срок при добавлении — только днями (пусто = бессрочно), удаление истекших — крон инсталлера.
+  Regen («Пересоздать файлы») — кнопка внутри карточки клиента
+  (эндпоинт держит и множественный выбор, UI множественный regen не предлагает).
+  Имя — ссылка в карточку: блоки Пир / Конфиг / `vpn://` / QR сверху вниз,
+  кнопки «Скопировать» у Конфига и `vpn://`, QR открывается в новой вкладке.
+- Срок при добавлении — только днями (пусто = бессрочно, max 3650), удаление истекших — крон инсталлера.
 - Auth: логин/пароль из `/etc/awg-panel/config.ini`
   (`webusername`/`webpassword`, дефолт `admin`/`admin`),
-  сессии в памяти, журнал в `/var/log/awg-panel/auth.log`. TOTP/2FA/API — нет.
-- Стек: Python3 stdlib (`http.server`, встроенный HTTPS), SSR + HTMX через CDN
-  (формы работают и без JS). Стороннего веб-сервера нет.
+  сессии в памяти (sliding TTL из `session_ttl_min`, абсолютный лимит 12 ч,
+  max 1000 сессий), журнал в `/var/log/awg-panel/auth.log` (0600, без переводов строк).
+  TOTP/2FA/API — нет.
+- Стек: Python3 stdlib (`http.server`, встроенный HTTPS), чистый SSR
+  (формы работают без JS; внешний HTMX/CDN удалён в 0.1.8, остался только
+  крошечный inline-скрипт кнопки «Скопировать»). Стороннего веб-сервера нет.
 - Привилегии: сервис работает от `root` и вызывает `manage`/`helper` напрямую
   без sudo (manage сам требует root: wg/iptables/конфиги). UFW/iptables не трогаем.
   Файл `/etc/sudoers.d/awg-panel` остался только как legacy для старых установок.
@@ -29,7 +36,8 @@
 ## Файлы проекта
 
 - `src/awg_panel/` — `server.py` (роуты+HTML), `manage.py` (обёртка `--json`),
-  `system_info.py` (`/proc`), `auth.py`, `config.py`, `validate.py`
+  `system_info.py` (`/proc`), `auth.py`, `config.py`, `validate.py`,
+  `__main__.py` (точка входа), `__init__.py` (версия)
 - `bin/awg-panel-helper` — безопасные чтения live-файлов (валидация имён,
   серверный `PrivateKey` никогда не отдаётся)
 - `bin/awg-panel-set-password` — смена логина/пароля в config.ini
@@ -89,8 +97,21 @@ visudo -c
   (helper публикует только `#_Name`/`PublicKey`).
 - Приватные ключи клиентов видит админ панели — так же, как root через manage.
 - `awg show dump` целиком не показываем (там PSK).
-- Все POST — с CSRF, кука `Secure; HttpOnly; SameSite=Lax`, rate-limit логина 5/5мин.
-- `manage` вызывается списком аргументов (без shell), имена — `^[A-Za-z0-9_-]{1,63}$`.
+- Все POST — с CSRF (constant-time, без падений на non-ASCII), редиректы после
+  POST — `303`, кука `Secure; HttpOnly; SameSite=Lax`, rate-limit логина 5/5мин
+  по socket-IP (`X-Forwarded-For` игнорируется).
+- Заголовки: `nosniff/DENY/no-referrer` + `CSP default-src 'self'`, `HSTS`, `Permissions-Policy`.
+- Лимиты: тело форм 1 МиБ (с закрытием соединения на `413`), max 2000 полей,
+  max 100 имён в батче (`add/remove/regen`), stdout manage до 1 МиБ, ответы
+  helper до 2 МиБ, таймаут соединения 10 с, лимит ожидания manage-фьючерсов.
+- `manage`/`helper` вызываются списком аргументов (без shell), имена —
+  `^[A-Za-z0-9_-]{1,63}$`, `expires` проверяется внутри (`^--expires=\d+d$`,
+  1..3650), helper держит allowlist команд и режет symlink/`PATH` зажат.
+- Пароль в `config.ini` в clear (600, root-only, атомарная запись через
+  `mkstemp+replace`); `%` в пароле разрешён (`interpolation=None`), пробелы
+  по краям не режутся; битый ini даёт дефолты, а не падение сервиса.
+- `key.pem` создаётся под `umask 077` (без окна 644), `config.ini` ставится
+  сразу `600`. Ошибки manage/helper в UI обобщены, детали — только в stderr сервиса.
 
 ## Проверка на dev-машине
 

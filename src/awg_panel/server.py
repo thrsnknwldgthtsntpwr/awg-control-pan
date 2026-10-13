@@ -1,7 +1,9 @@
 """HTTPS server (stdlib only): routing, sessions, HTML rendering."""
 from __future__ import annotations
 
+import concurrent.futures
 import datetime
+import hmac
 import html
 import ssl
 import sys
@@ -17,17 +19,30 @@ from .manage import cmd_add, cmd_check, cmd_list, cmd_regen, cmd_remove, cmd_sta
 from .system_info import cpu_pct, disk_usage, fmt_bytes, load_avg, mem_info, net_dev, uptime_str
 from .validate import expires_flag, parse_names, valid_client_name
 
-HTMX = ('<script src="https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js" defer '
-        'integrity="sha384-ujb1lZYygJmzgSwoxRggbCHcjc0rB2XoQrxeTUQyRjrOnlCoYta87iKBWq3EsdM2" '
-        'crossorigin="anonymous"></script>')
 CSS = '<link rel="stylesheet" href="/static/style.css">'
 
 # Cap form bodies to avoid OOM on huge POSTs.
 MAX_FORM_BYTES = 1 << 20  # 1 MiB
+# Cap batch sizes: 1 MiB of `sel=` is ~50k names -> ARG_MAX/fork-DoS.
+MAX_SEL = 100
+# Cap number of form fields (a=1&a=1... CPU/RAM-DoS).
+MAX_FORM_FIELDS = 2000
+# Cap helper payloads kept in memory / sent back (QR/conf/uri).
+MAX_HELPER_BYTES = 2 << 20  # 2 MiB
+# Bound on waiting for manage/helper futures (their own timeouts are
+# 15-120s; without this an authed client holds handler threads forever).
+FUT_TIMEOUT = 40
 
 
 def e(s) -> str:
     return html.escape(str(s), quote=True)
+
+
+def hmac_eq(a, b) -> bool:
+    try:
+        return hmac.compare_digest(str(a or "").encode("utf-8"), str(b or "").encode("utf-8"))
+    except Exception:
+        return False
 
 
 def fmt_exp(exp) -> str:
@@ -35,19 +50,35 @@ def fmt_exp(exp) -> str:
         return "бессрочно"
     try:
         ts = int(exp)
-    except (TypeError, ValueError):
+        dt = datetime.datetime.fromtimestamp(ts).strftime("%d.%m.%Y")
+    except (TypeError, ValueError, OverflowError, OSError):
         return "?"
-    dt = datetime.datetime.fromtimestamp(ts).strftime("%d.%m.%Y")
     left = (ts - datetime.datetime.now().timestamp()) / 86400
     if left < 0:
         return f"{dt} (истёк)"
     return f"{dt} (осталось {int(left)} дн.)"
 
 
+def fmt_hs(hs) -> str:
+    try:
+        ts = int(hs)
+    except (TypeError, ValueError):
+        return "никогда"
+    if not ts:
+        return "никогда"
+    try:
+        return datetime.datetime.fromtimestamp(ts).strftime("%d.%m.%Y %H:%M")
+    except (ValueError, OverflowError, OSError):
+        return "?"
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = f"awg-panel/{__version__}"
     cfg: PanelConfig = PanelConfig()  # set by main()
     auth: AuthStore = None  # set by main()
+    # Per-connection socket timeout: bounds slow-body/slowloris reads
+    # (rfile.read with fake Content-Length no longer hangs a thread forever).
+    timeout = 10
 
     # ---------- helpers ----------
     def log_message(self, *a):  # quieter: errors to stderr, successful hits silenced
@@ -68,11 +99,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def _sess(self):
         sid = self._cookie_sid()
+        if not sid or not isinstance(sid, str) or len(sid) > 256:
+            return None
         return self.auth.get(sid) if sid else None
 
     def _client_ip(self) -> str:
-        return (self.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-                or self.client_address[0])
+        # Direct connections only (no trusted reverse proxy): never trust
+        # X-Forwarded-For — it is client-controlled and would let anyone
+        # bypass the login rate-limit and forge auth.log entries.
+        return self.client_address[0]
 
     def _send(self, code: int, body: str | bytes, ctype="text/html; charset=utf-8", extra=None,
                 no_store: bool = True):
@@ -84,6 +119,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Content-Security-Policy",
+                         "default-src 'self'; img-src 'self' data:; "
+                         "style-src 'self' 'unsafe-inline'; script-src 'self'")
+        self.send_header("Strict-Transport-Security", "max-age=31536000")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         if no_store:
             self.send_header("Cache-Control", "no-store")
             self.send_header("Pragma", "no-cache")
@@ -111,7 +151,7 @@ class Handler(BaseHTTPRequestHandler):
         h = {"Location": where}
         if cookie is not None:
             h["Set-Cookie"] = cookie
-        self._send(302, "", extra=h)
+        self._send(303, "", extra=h)
 
     def _set_session_cookie(self, sid: str | None) -> str:
         if sid:
@@ -134,11 +174,17 @@ class Handler(BaseHTTPRequestHandler):
         if n < 0:
             n = 0
         if n > MAX_FORM_BYTES:
-            # Drain nothing; caller turns this into 413.
+            # Close the connection: leftover bytes would otherwise be parsed
+            # as the next HTTP request on keep-alive (desync).
+            self.close_connection = True
             raise ValueError("form too large")
         raw = self.rfile.read(n).decode("utf-8", "replace") if n else ""
+        pairs = urllib.parse.parse_qsl(raw, keep_blank_values=True)
+        if len(pairs) > MAX_FORM_FIELDS:
+            self.close_connection = True
+            raise ValueError("form too large")
         out = {}
-        for k, v in urllib.parse.parse_qsl(raw, keep_blank_values=True):
+        for k, v in pairs:
             if k in out:
                 if isinstance(out[k], list):
                     out[k].append(v)
@@ -153,7 +199,9 @@ class Handler(BaseHTTPRequestHandler):
         tok = form.get("csrf", "")
         if isinstance(tok, list):
             tok = tok[0] if tok else ""
-        return bool(s and tok and hmac_eq(tok, s.csrf))
+        if not isinstance(tok, str) or not tok:
+            return False
+        return bool(s and hmac_eq(tok, s.csrf))
 
     # ---------- pages ----------
     def _layout(self, title: str, active: str, body: str, csrf: str = "") -> str:
@@ -170,7 +218,7 @@ class Handler(BaseHTTPRequestHandler):
         nav = nav_links + logout
         return ("<!doctype html><html lang=ru><head><meta charset=utf-8>"
                 "<meta name=viewport content='width=device-width,initial-scale=1'>"
-                f"<title>{e(title)} — AWG Panel</title>{CSS}{HTMX}</head>"
+                f"<title>{e(title)} — AWG Panel</title>{CSS}</head>"
                 f"<body><aside><div class=brand>AWG Panel<small>v{__version__}</small></div>"
                 f"<nav>{nav}</nav></aside><main>{body}</main></body></html>")
 
@@ -178,12 +226,10 @@ class Handler(BaseHTTPRequestHandler):
         msg = f'<p class=err>{e(err)}</p>' if err else ""
         return self._layout("Вход", "", f"<div class=card style='max-width:420px'><h1>Вход</h1>{msg}"
                            "<form method=post action=/login>"
-                           "<label>Логин<input name=user value=admin></label>"
+                           "<label>Логин<input name=user></label>"
                            "<label>Пароль<input type=password name=password autofocus></label>"
                            "<button>Войти</button></form>"
-                           "<p class=muted>Логин/пароль из /etc/awg-panel/config.ini "
-                           "(webusername/webpassword). После правок: "
-                           "<code>sudo systemctl restart awg-panel</code>.</p></div>")
+                           "<p class=muted>Доступ задаётся администратором сервера.</p></div>")
 
     def _page_status(self, tab: str) -> str:
         s = self._sess()
@@ -204,11 +250,15 @@ class Handler(BaseHTTPRequestHandler):
             "<p><a href=/status>Остаться</a></p></div>", csrf)
 
     def _server_block(self) -> str:
-        mem = mem_info()
-        la = load_avg()
-        cpu = cpu_pct()
-        disk = disk_usage("/")
-        nets = net_dev()
+        try:
+            mem = mem_info()
+            la = load_avg()
+            cpu = cpu_pct()
+            disk = disk_usage("/")
+            nets = net_dev()
+        except Exception as ex:
+            sys.stderr.write(f"awg-panel: status server block failed: {ex}\n")
+            return "<div class=card><h2>Система</h2><p class=err>Не удалось прочитать состояние сервера.</p></div>"
         net_rows = "".join(
             f"<tr><td>{e(n['if'])}</td><td>{e(fmt_bytes(n['rx']))}</td><td>{e(fmt_bytes(n['tx']))}</td></tr>"
             for n in nets) or "<tr><td colspan=3>нет данных</td></tr>"
@@ -216,17 +266,24 @@ class Handler(BaseHTTPRequestHandler):
                 f"<div class=card><h2>Система</h2><table>"
                 f"<tr><th>Uptime</th><td>{e(uptime_str())}</td></tr>"
                 f"<tr><th>Load</th><td>{e(la['l1'])} / {e(la['l5'])} / {e(la['l15'])} (CPU: {e(la['cpus'])})</td></tr>"
-                f"<tr><th>CPU</th><td>{'—' if cpu is None else f'{cpu} %'}</td></tr>"
-                f"<tr><th>RAM</th><td>{e(fmt_bytes(mem['used_kb']*1024))} / {e(fmt_bytes(mem['total_kb']*1024))} ({mem['used_pct']} %)</td></tr>"
-                f"<tr><th>Диск /</th><td>{e(fmt_bytes(disk['used']))} / {e(fmt_bytes(disk['total']))} ({disk['pct']} %)</td></tr>"
+                f"<tr><th>CPU</th><td>{'—' if cpu is None else f'{e(cpu)} %'}</td></tr>"
+                f"<tr><th>RAM</th><td>{e(fmt_bytes(mem['used_kb']*1024))} / {e(fmt_bytes(mem['total_kb']*1024))} ({e(mem['used_pct'])} %)</td></tr>"
+                f"<tr><th>Диск /</th><td>{e(fmt_bytes(disk['used']))} / {e(fmt_bytes(disk['total']))} ({e(disk['pct'])} %)</td></tr>"
                 f"</table><p class=muted>Источник: /proc (без выполнения manage).</p></div>"
                 f"<div class=card><h2>Интерфейсы</h2><table><tr><th>Iface</th><th>RX</th><th>TX</th></tr>{net_rows}</table>"
                 f"<p class=muted>Счётчики с загрузки (/proc/net/dev), не скорость.</p></div>"
                 f"</div>{self._journal_block()}")
 
     def _awg_block(self) -> str:
-        r = cmd_check(self.cfg.manage_script)
-        rc, init_raw, _ = run_helper(self.cfg.helper, "init-info")
+        try:
+            r = cmd_check(self.cfg.manage_script)
+            rc, init_raw, _ = run_helper(self.cfg.helper, "init-info")
+        except ValueError as ex:
+            sys.stderr.write(f"awg-panel: awg block failed: {ex}\n")
+            return "<div class=card><h2>AWG</h2><p class=err>Внутренняя ошибка.</p></div>"
+        except Exception as ex:
+            sys.stderr.write(f"awg-panel: awg block failed: {ex}\n")
+            return "<div class=card><h2>AWG</h2><p class=err>Не удалось получить статус AWG.</p></div>"
         proto = ver = "?"
         if rc == 0:
             for line in init_raw.decode("utf-8", "replace").splitlines():
@@ -235,21 +292,23 @@ class Handler(BaseHTTPRequestHandler):
                 if line.startswith("SCRIPT_VERSION="):
                     ver = line.split("=", 1)[1]
         if not r.ok or not isinstance(r.data, dict):
-            return (f"<div class=card><h2>AWG</h2><p class=err>manage check failed (rc={r.rc}). "
+            sys.stderr.write(f"awg-panel: manage check failed rc={r.rc}: {(r.stderr or '')[-500:]}\n")
+            return (f"<div class=card><h2>AWG</h2><p class=err>Не удалось получить статус AWG (rc={r.rc}). "
                     f"Установщик: v{e(ver)}, поколение: {e(proto)}.</p>"
-                    f"<pre>{e((r.stderr or '')[-1500:])}</pre></div>")
+                    f"<p class=muted>Подробности — в журнале сервиса по SSH.</p></div>")
         d = r.data
-        svc = d.get("service", {})
-        iface = d.get("interface", {})
-        port = d.get("port", {})
-        mod = d.get("module", {})
-        fw = d.get("firewall", {})
+        svc = d.get("service", {}) if isinstance(d.get("service", {}), dict) else {}
+        iface = d.get("interface", {}) if isinstance(d.get("interface", {}), dict) else {}
+        port = d.get("port", {}) if isinstance(d.get("port", {}), dict) else {}
+        mod = d.get("module", {}) if isinstance(d.get("module", {}), dict) else {}
+        fw = d.get("firewall", {}) if isinstance(d.get("firewall", {}), dict) else {}
+        clients = d.get("clients", {}) if isinstance(d.get("clients", {}), dict) else {}
         rows = (
             ("Юнит", f"{svc.get('unit','?')} — {'active' if svc.get('active') else 'DOWN'}"),
             ("Интерфейс", f"awg0 present={iface.get('present')} mtu={iface.get('mtu')} addrs={iface.get('addresses')}"),
             ("Порт", f"{port.get('number')}/{port.get('proto')} listening={port.get('listening')}"),
             ("Модуль", f"loaded={mod.get('loaded')} version={mod.get('version')}"),
-            ("Клиентов (peers)", d.get("clients", {}).get("total", "?")),
+            ("Клиентов (peers)", clients.get("total", "?")),
             ("UFW", f"active={fw.get('ufw_active')} port_allowed={fw.get('port_allowed')} (панель не меняет)"),
             ("Поколение", d.get("protocol", proto)),
             ("Установщик", f"v{ver}"),
@@ -272,6 +331,8 @@ class Handler(BaseHTTPRequestHandler):
     def _clients_table(self, clients: list, stats_map: dict, pubkeys: dict) -> str:
         rows = []
         for c in clients:
+            if not isinstance(c, dict):
+                continue
             name = c.get("name", "?")
             ip = c.get("ip", "?")
             st = c.get("status", "?")
@@ -279,12 +340,15 @@ class Handler(BaseHTTPRequestHandler):
             cls = "ok" if code == "active" else ("warn" if code == "recent" else "muted")
             s = stats_map.get(name, {})
             traf = ""
-            if s:
-                traf = f"{fmt_bytes(s.get('rx',0))} / {fmt_bytes(s.get('tx',0))}"
+            if isinstance(s, dict) and s:
+                try:
+                    traf = f"{fmt_bytes(s.get('rx',0))} / {fmt_bytes(s.get('tx',0))}"
+                except Exception:
+                    traf = "?"
             pk = pubkeys.get(name, "…")
             rows.append(
                 f"<tr><td><input type=checkbox name=sel value='{e(name)}'></td>"
-                f"<td><a href='/client?name={urllib.parse.quote(name)}'>{e(name)}</a></td>"
+                f"<td><a href='/client?name={urllib.parse.quote(str(name))}'>{e(name)}</a></td>"
                 f"<td>{e(ip)}</td><td class=mono>{e(pk)}</td>"
                 f"<td class={cls}>{e(st)}</td><td>{e(traf)}</td>"
                 f"<td>{e(fmt_exp(c.get('expires_at')))}</td></tr>")
@@ -295,18 +359,28 @@ class Handler(BaseHTTPRequestHandler):
     def _page_clients(self, msg="") -> str:
         s = self._sess()
         csrf = s.csrf if s else ""
-        # list/stats/helper run in parallel: sequential timeouts summed to 75s+ before.
-        with ThreadPoolExecutor(max_workers=3) as ex:
-            fl = ex.submit(cmd_list, self.cfg.manage_script)
-            fs = ex.submit(cmd_stats, self.cfg.manage_script)
-            fh = ex.submit(run_helper, self.cfg.helper, "server-pubkeys")
-            rl = fl.result()
-            rs = fs.result()
-            _rc, pk_raw, _e = fh.result()
+        # list/stats/helper run in parallel with an overall future timeout
+        # so one hung manage call cannot hold handler threads forever.
+        try:
+            with ThreadPoolExecutor(max_workers=3) as ex:
+                fl = ex.submit(cmd_list, self.cfg.manage_script)
+                fs = ex.submit(cmd_stats, self.cfg.manage_script)
+                fh = ex.submit(run_helper, self.cfg.helper, "server-pubkeys")
+                rl = fl.result(timeout=FUT_TIMEOUT)
+                rs = fs.result(timeout=FUT_TIMEOUT)
+                _rc, pk_raw, _e = fh.result(timeout=FUT_TIMEOUT)
+        except concurrent.futures.TimeoutError:
+            sys.stderr.write("awg-panel: clients page future timeout\n")
+            return self._layout("Клиенты", "clients",
+                "<h1>Клиенты</h1><p class=err>Превышено время ожидания manage. Попробуйте позже.</p>", csrf)
+        except ValueError as ex:
+            sys.stderr.write(f"awg-panel: clients page failed: {ex}\n")
+            return self._layout("Клиенты", "clients",
+                "<h1>Клиенты</h1><p class=err>Внутренняя ошибка.</p>", csrf)
         clients = rl.data if rl.ok and isinstance(rl.data, list) else []
         stats_map = {}
         if rs.ok and isinstance(rs.data, list):
-            stats_map = {x.get("name"): x for x in rs.data}
+            stats_map = {x.get("name"): x for x in rs.data if isinstance(x, dict)}
         pubkeys = {}
         cur = ""
         for line in pk_raw.decode("utf-8", "replace").splitlines():
@@ -318,7 +392,8 @@ class Handler(BaseHTTPRequestHandler):
                 cur = ""
         m = f"<p class={'ok' if rl.ok else 'err'}>{e(msg)}</p>" if msg else ""
         if not rl.ok:
-            m += f"<p class=err>list failed rc={rl.rc}</p><pre>{e((rl.stderr or '')[-1000:])}</pre>"
+            sys.stderr.write(f"awg-panel: manage list failed rc={rl.rc}: {(rl.stderr or '')[-500:]}\n")
+            m += "<p class=err>Не удалось получить список клиентов. Подробности — в журнале сервиса.</p>"
         tbl = self._clients_table(clients, stats_map, pubkeys)
         return self._layout("Клиенты", "clients",
             f"<h1>Клиенты <span class=muted>({len(clients)})</span></h1>{m}"
@@ -338,24 +413,37 @@ class Handler(BaseHTTPRequestHandler):
         csrf0 = s0.csrf if s0 else ""
         if not valid_client_name(name):
             return self._layout("Клиент", "clients", "<p class=err>bad name</p>", csrf0)
-        with ThreadPoolExecutor(max_workers=4) as ex:
-            fl = ex.submit(cmd_list, self.cfg.manage_script)
-            fs = ex.submit(cmd_stats, self.cfg.manage_script)
-            f1 = ex.submit(run_helper, self.cfg.helper, "client-conf", name)
-            f2 = ex.submit(run_helper, self.cfg.helper, "client-uri", name)
-            rl = fl.result()
-            rs = fs.result()
-            rc1, conf, _e1 = f1.result()
-            rc2, uri, _e2 = f2.result()
+        try:
+            with ThreadPoolExecutor(max_workers=4) as ex:
+                fl = ex.submit(cmd_list, self.cfg.manage_script)
+                fs = ex.submit(cmd_stats, self.cfg.manage_script)
+                f1 = ex.submit(run_helper, self.cfg.helper, "client-conf", name)
+                f2 = ex.submit(run_helper, self.cfg.helper, "client-uri", name)
+                rl = fl.result(timeout=FUT_TIMEOUT)
+                rs = fs.result(timeout=FUT_TIMEOUT)
+                rc1, conf, _e1 = f1.result(timeout=FUT_TIMEOUT)
+                rc2, uri, _e2 = f2.result(timeout=FUT_TIMEOUT)
+        except concurrent.futures.TimeoutError:
+            sys.stderr.write("awg-panel: client page future timeout\n")
+            return self._layout(name, "clients", "<p class=err>Превышено время ожидания. Попробуйте позже.</p>", csrf0)
+        except ValueError as ex:
+            sys.stderr.write(f"awg-panel: client page failed: {ex}\n")
+            return self._layout(name, "clients", "<p class=err>Внутренняя ошибка.</p>", csrf0)
+        if len(conf) > MAX_HELPER_BYTES or len(uri) > MAX_HELPER_BYTES:
+            sys.stderr.write("awg-panel: helper payload too large\n")
+            return self._layout(name, "clients", "<p class=err>Файл клиента слишком большой.</p>", csrf0)
         info = {}
         if rl.ok and isinstance(rl.data, list):
-            info = next((c for c in rl.data if c.get("name") == name), {})
-        st = next((c for c in (rs.data if rs.ok and isinstance(rs.data, list) else []) if c.get("name") == name), {})
+            info = next((c for c in rl.data if isinstance(c, dict) and c.get("name") == name), {})
+        st = next((c for c in (rs.data if rs.ok and isinstance(rs.data, list) else [])
+                   if isinstance(c, dict) and c.get("name") == name), {})
         conf_txt = conf.decode("utf-8", "replace") if rc1 == 0 else "(нет .conf — regen?)"
         uri_txt = uri.decode("utf-8", "replace").strip() if rc2 == 0 else ""
-        traf = f"{fmt_bytes(st.get('rx',0))} / {fmt_bytes(st.get('tx',0))}" if st else "—"
-        hs = st.get("last_handshake", 0) if st else 0
-        hs_s = datetime.datetime.fromtimestamp(hs).strftime("%d.%m.%Y %H:%M") if hs else "никогда"
+        try:
+            traf = f"{fmt_bytes(st.get('rx',0))} / {fmt_bytes(st.get('tx',0))}" if st else "—"
+        except Exception:
+            traf = "?"
+        hs_s = fmt_hs(st.get("last_handshake", 0)) if st else "никогда"
         return self._layout(name, "clients",
             f"<h1><a href=/clients>Клиенты</a> / {e(name)}</h1>"
             "<div class=stack>"
@@ -386,7 +474,8 @@ class Handler(BaseHTTPRequestHandler):
         if u.path in ("/",):
             return self._redirect("/status")
         if u.path == "/static/style.css":
-            return self._send(200, STYLE_CSS, "text/css; charset=utf-8", no_store=False)
+            return self._send(200, STYLE_CSS, "text/css; charset=utf-8",
+                              extra={"Cache-Control": "max-age=3600"}, no_store=False)
         if u.path == "/login":
             return self._send(200, self._page_login())
         if u.path == "/logout":
@@ -411,9 +500,14 @@ class Handler(BaseHTTPRequestHandler):
             name = q.get("name", [""])[0]
             if not valid_client_name(name):
                 return self._send_auth(400, "bad name", "text/plain")
-            rc, data, err = run_helper(self.cfg.helper, "client-qr", name)
+            try:
+                rc, data, _err = run_helper(self.cfg.helper, "client-qr", name)
+            except ValueError:
+                return self._send_auth(400, "bad name", "text/plain")
             if rc != 0:
                 return self._send_auth(404, "not found", "text/plain")
+            if len(data) > MAX_HELPER_BYTES:
+                return self._send_auth(413, "too large", "text/plain")
             return self._send_auth(200, data, "image/png")
         if u.path == "/download":
             name = q.get("name", [""])[0]
@@ -421,12 +515,17 @@ class Handler(BaseHTTPRequestHandler):
             if not valid_client_name(name) or typ not in ("conf", "vpnuri"):
                 return self._send_auth(400, "bad request", "text/plain")
             act = "client-conf" if typ == "conf" else "client-uri"
-            rc, data, err = run_helper(self.cfg.helper, act, name)
+            try:
+                rc, data, _err = run_helper(self.cfg.helper, act, name)
+            except ValueError:
+                return self._send_auth(400, "bad request", "text/plain")
             if rc != 0:
                 return self._send_auth(404, "not found", "text/plain")
+            if len(data) > MAX_HELPER_BYTES:
+                return self._send_auth(413, "too large", "text/plain")
             fn = f"{name}.{'conf' if typ=='conf' else 'vpnuri.txt'}"
             return self._send_auth(200, data, "application/octet-stream",
-                              {"Content-Disposition": f"attachment; filename=\"{fn}\""})
+                              {"Content-Disposition": f"attachment; filename=\"{fn}\"; filename*=UTF-8''{urllib.parse.quote(fn)}"})
         return self._send_auth(404, "not found", "text/plain")
 
     def do_POST(self):
@@ -443,10 +542,18 @@ class Handler(BaseHTTPRequestHandler):
             pw = form.get("password", "")
             if isinstance(pw, list):
                 pw = pw[0] if pw else ""
+            if not isinstance(pw, str):
+                pw = str(pw)
             user = form.get("user", "")
             if isinstance(user, list):
                 user = user[0] if user else ""
-            user = (user or "").strip() or "admin"
+            if not isinstance(user, str):
+                user = str(user)
+            user = user.strip()
+            if not user:
+                self.auth.note_fail(ip)
+                self.auth.journal(ip, "-", False, "empty user")
+                return self._send(200, self._page_login("Неверный логин или пароль"))
             if self.auth.verify(user, pw):
                 self.auth.note_ok(ip)
                 self.auth.journal(ip, user, True)
@@ -477,58 +584,95 @@ class Handler(BaseHTTPRequestHandler):
             v = form.get("sel", [])
             if isinstance(v, str):
                 v = [v]
+            if not isinstance(v, list):
+                v = [v]
+            v = [x for x in v if isinstance(x, str)][:MAX_SEL + 1]
+            if len(v) > MAX_SEL:
+                return [], ["too many selected (max 100)"]
             ok = [x for x in v if valid_client_name(x)]
             bad = [x for x in v if not valid_client_name(x)]
             return ok, bad
 
+        def _fail(msg: str, rc, stderr: str | None):
+            sys.stderr.write(f"awg-panel: manage failed {msg} rc={rc}: {(stderr or '')[-500:]}\n")
+            return self._send_auth(200, self._page_clients(f"{msg}: операция не выполнена (rc={rc})"))
+
         if u.path == "/clients/add":
             names_raw = form.get("names", "")
             if isinstance(names_raw, list):
-                names_raw = names_raw[0]
+                names_raw = names_raw[0] if names_raw else ""
+            if not isinstance(names_raw, str):
+                names_raw = str(names_raw)
             days = form.get("days", "")
             if isinstance(days, list):
-                days = days[0]
+                days = days[0] if days else ""
+            if not isinstance(days, str):
+                try:
+                    days = str(days)
+                except Exception:
+                    days = ""
             ok_names, bad = parse_names(names_raw)
             if bad:
-                return self._send_auth(200, self._page_clients(f"Плохие имена: {', '.join(bad)}"))
+                return self._send_auth(200, self._page_clients(f"Плохие имена: {', '.join(bad[:10])}"))
             if not ok_names:
                 return self._send_auth(200, self._page_clients("Пусто: укажите имена"))
+            if len(ok_names) > MAX_SEL:
+                return self._send_auth(200, self._page_clients(f"Слишком много имён (max {MAX_SEL})"))
             try:
                 flag = expires_flag(days)
             except ValueError as ex:
                 return self._send_auth(200, self._page_clients(str(ex)))
-            r = cmd_add(self.cfg.manage_script, ok_names, flag)
+            try:
+                r = cmd_add(self.cfg.manage_script, ok_names, flag)
+            except ValueError as ex:
+                return self._send_auth(200, self._page_clients(str(ex)))
             if r.ok:
                 return self._redirect("/clients")
-            return self._send_auth(200, self._page_clients(f"add failed rc={r.rc}: {(r.stderr or '')[-500:]}"))
+            return _fail("add failed", r.rc, r.stderr)
         if u.path == "/clients/delete":
             names, bad = sel_list()
             if bad:
-                return self._send_auth(200, self._page_clients(f"Плохие имена в выборе: {', '.join(bad)}"))
+                return self._send_auth(200, self._page_clients(f"Плохие имена в выборе: {', '.join(bad[:10])}"))
             if not names:
                 return self._send_auth(200, self._page_clients("Ничего не выбрано"))
-            r = cmd_remove(self.cfg.manage_script, names)
+            try:
+                r = cmd_remove(self.cfg.manage_script, names)
+            except ValueError as ex:
+                return self._send_auth(200, self._page_clients(str(ex)))
             if r.ok:
                 return self._redirect("/clients")
-            return self._send_auth(200, self._page_clients(f"remove failed rc={r.rc}: {(r.stderr or '')[-500:]}"))
+            return _fail("remove failed", r.rc, r.stderr)
         if u.path == "/clients/regen":
             names, bad = sel_list()
             if bad:
-                return self._send_auth(200, self._page_clients(f"Плохие имена в выборе: {', '.join(bad)}"))
+                return self._send_auth(200, self._page_clients(f"Плохие имена в выборе: {', '.join(bad[:10])}"))
             if not names:
                 return self._send_auth(200, self._page_clients("Ничего не выбрано для regen"))
-            r = cmd_regen(self.cfg.manage_script, names)
+            try:
+                r = cmd_regen(self.cfg.manage_script, names)
+            except ValueError as ex:
+                return self._send_auth(200, self._page_clients(str(ex)))
             if r.ok:
                 if len(names) == 1:
                     return self._redirect("/client?name=" + urllib.parse.quote(names[0]))
                 return self._redirect("/clients")
-            return self._send_auth(200, self._page_clients(f"regen failed rc={r.rc}: {(r.stderr or '')[-500:]}"))
+            return _fail("regen failed", r.rc, r.stderr)
         return self._send_auth(404, "not found", "text/plain")
 
+    def do_HEAD(self):
+        self._send(405, "method not allowed", "text/plain")
 
-def hmac_eq(a: str, b: str) -> bool:
-    import hmac as _h
-    return _h.compare_digest(a, b)
+    def do_PUT(self):
+        self._send(405, "method not allowed", "text/plain")
+
+    def do_DELETE(self):
+        self._send(405, "method not allowed", "text/plain")
+
+    def do_PATCH(self):
+        self._send(405, "method not allowed", "text/plain")
+
+    def do_OPTIONS(self):
+        self._send(405, "method not allowed", "text/plain")
 
 
 COPY_JS = """<script>
@@ -564,6 +708,7 @@ def run(cfg: PanelConfig):
             f"TLS cert/key not found: cert={cfg.cert} key={cfg.key} "
             "(postinst normally creates them; check /etc/awg-panel/config.ini)")
     srv = ThreadingHTTPServer((cfg.host, cfg.port), Handler)
+    srv.daemon_threads = True
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     try:
         ctx.load_cert_chain(cfg.cert, cfg.key)

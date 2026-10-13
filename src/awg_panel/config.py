@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import configparser
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
+
+_HOST_RE = re.compile(r"^[A-Za-z0-9.\-:]{1,253}$")
 
 
 @dataclass
@@ -19,7 +22,7 @@ class PanelConfig:
     auth_log: str = "/var/log/awg-panel/auth.log"
     session_ttl_min: int = 30
     webusername: str = "admin"
-    webpassword: str = "admin"
+    webpassword: str = field(default="admin", repr=False)
 
 
 def load_config(path: str = "/etc/awg-panel/config.ini") -> PanelConfig:
@@ -27,14 +30,19 @@ def load_config(path: str = "/etc/awg-panel/config.ini") -> PanelConfig:
     p = Path(path)
     if not p.is_file():
         return cfg
-    cp = configparser.ConfigParser()
-    cp.read(p, encoding="utf-8")
-    s = cp["server"] if "server" in cp else {}
+    cp = configparser.ConfigParser(interpolation=None)
+    try:
+        cp.read(p, encoding="utf-8")
+        s = cp["server"] if "server" in cp else {}
+    except (configparser.Error, OSError, UnicodeDecodeError):
+        # Broken config (no section header, bad encoding, unreadable):
+        # fail safe to defaults instead of crashing the service.
+        return cfg
     host = (s.get("host", cfg.host) or "").strip() or cfg.host
-    cfg.host = host
+    cfg.host = host if _HOST_RE.match(host) else "0.0.0.0"
     try:
         cfg.port = int(s.get("port", cfg.port))
-    except ValueError:
+    except (TypeError, ValueError):
         cfg.port = 8443
     if not 1 <= cfg.port <= 65535:
         cfg.port = 8443
@@ -46,10 +54,17 @@ def load_config(path: str = "/etc/awg-panel/config.ini") -> PanelConfig:
     cfg.helper = (s.get("helper", cfg.helper) or cfg.helper).strip() or cfg.helper
     cfg.auth_log = (s.get("auth_log", cfg.auth_log) or cfg.auth_log).strip() or cfg.auth_log
     cfg.webusername = (s.get("webusername", cfg.webusername) or cfg.webusername).strip() or "admin"
-    cfg.webpassword = (s.get("webpassword", cfg.webpassword) or cfg.webpassword).strip() or "admin"
+    # Passwords are NOT stripped: spaces are significant. Only treat
+    # whitespace-only as missing. ConfigParser with interpolation=None
+    # allows % in passwords.
+    _pw = s.get("webpassword", None)
+    if _pw is None or not _pw.strip():
+        cfg.webpassword = "admin"
+    else:
+        cfg.webpassword = _pw.strip("\r\n")
     try:
         cfg.session_ttl_min = int(s.get("session_ttl_min", cfg.session_ttl_min))
-    except ValueError:
+    except (TypeError, ValueError):
         cfg.session_ttl_min = 30
     if cfg.session_ttl_min < 1:
         cfg.session_ttl_min = 1

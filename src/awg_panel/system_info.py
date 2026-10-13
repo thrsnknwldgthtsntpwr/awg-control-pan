@@ -82,11 +82,16 @@ def net_dev() -> list[dict]:
 def cpu_pct() -> float | None:
     """Blocking ~0.3s snapshot of /proc/stat (None on error)."""
     def snap():
-        for line in _read("/proc/stat").splitlines():
-            if line.startswith("cpu "):
-                p = [int(x) for x in line.split()[1:8]]
-                idle = p[3] + p[4]
-                return sum(p), idle
+        try:
+            for line in _read("/proc/stat").splitlines():
+                if line.startswith("cpu "):
+                    p = [int(x) for x in line.split()[1:8]]
+                    if len(p) < 5:
+                        return None
+                    idle = p[3] + p[4]
+                    return sum(p), idle
+        except (ValueError, IndexError):
+            return None
         return None
     a = snap()
     if not a:
