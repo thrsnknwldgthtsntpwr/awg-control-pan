@@ -344,6 +344,7 @@ class TestClientPage(unittest.TestCase):
         self.assertIn(".actions form{margin:0}", STYLE_CSS)
 
     def test_copy_buttons_conf_and_vpn(self):
+        from awg_panel.server import COPY_JS, COPY_TAG
         body = self._render_client()
         i_conf_pre = body.index('id=conf-pre')
         i_vpn_pre = body.index('id=vpn-pre')
@@ -352,8 +353,47 @@ class TestClientPage(unittest.TestCase):
         self.assertLess(body.index("<h2>vpn://</h2>"), i_vpn_pre)
         self.assertLess(i_vpn_pre, body.index("data-src=vpn-pre"))
         self.assertEqual(body.count(">Скопировать<"), 2)
-        self.assertIn("navigator.clipboard.writeText", body)
-        self.assertIn("execCommand('copy')", body)
+        # 0.1.9: CSP (script-src 'self') forbids inline scripts, so the page
+        # only references the external file; the logic itself is asserted
+        # against COPY_JS below and served by test_copy_js_static_route.
+        self.assertIn(COPY_TAG, body)
+        self.assertIn('/static/copy.js', body)
+        self.assertNotIn("navigator.clipboard.writeText", body)
+        self.assertIn("navigator.clipboard.writeText", COPY_JS)
+        self.assertIn("execCommand('copy')", COPY_JS)
+        self.assertIn("createElement('textarea')", COPY_JS)
+        self.assertIn("Не скопировалось", COPY_JS)
+        self.assertIn("DOMContentLoaded", COPY_JS)
+
+    def test_copy_js_static_route(self):
+        # /static/copy.js must be served (200 + javascript) without auth,
+        # otherwise CSP script-src 'self' leaves the buttons dead.
+        from io import BytesIO
+        from awg_panel import server as srv
+        h = srv.Handler.__new__(srv.Handler)
+        h.command = "GET"
+        h.path = "/static/copy.js"
+        h.wfile = BytesIO()
+        sent = {}
+
+        def send_response(code, msg=None):
+            sent["code"] = code
+
+        def send_header(k, v):
+            sent.setdefault("hdrs", []).append((k, v))
+
+        h.send_response = send_response
+        h.send_header = send_header
+        h.end_headers = lambda: sent.setdefault("ended", True)
+        h.do_GET()
+        self.assertEqual(sent.get("code"), 200)
+        hdrs = dict(sent.get("hdrs", []))
+        self.assertIn("javascript", hdrs.get("Content-Type", ""))
+        csp = hdrs.get("Content-Security-Policy", "")
+        self.assertIn("script-src 'self'", csp)
+        raw = h.wfile.getvalue()
+        self.assertIn(b"awgCopy", raw)
+        self.assertEqual(raw.decode("utf-8"), srv.COPY_JS)
 
     def test_buttons_unified_font(self):
         from awg_panel.server import STYLE_CSS

@@ -465,7 +465,7 @@ class Handler(BaseHTTPRequestHandler):
                "<div class=actions><button type=button data-src=vpn-pre>Скопировать</button></div></div>" if uri_txt else "")
             + (f"<div class=card><h2>QR</h2><img src='/client-qr?name={urllib.parse.quote(name)}' alt=QR style='max-width:260px'></div>"
                if rc1 == 0 else "")
-            + "</div>" + COPY_JS, csrf0)
+            + "</div>" + COPY_TAG, csrf0)
 
     # ---------- HTTP verbs ----------
     def do_GET(self):
@@ -475,6 +475,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._redirect("/status")
         if u.path == "/static/style.css":
             return self._send(200, STYLE_CSS, "text/css; charset=utf-8",
+                              extra={"Cache-Control": "max-age=3600"}, no_store=False)
+        if u.path == "/static/copy.js":
+            return self._send(200, COPY_JS, "application/javascript; charset=utf-8",
                               extra={"Cache-Control": "max-age=3600"}, no_store=False)
         if u.path == "/login":
             return self._send(200, self._page_login())
@@ -675,9 +678,16 @@ class Handler(BaseHTTPRequestHandler):
         self._send(405, "method not allowed", "text/plain")
 
 
-COPY_JS = """<script>
-document.querySelectorAll('button[data-src]').forEach(function(b){b.addEventListener('click',function(){var el=document.getElementById(b.getAttribute('data-src'));if(!el)return;var t=el.textContent;function done(){b.textContent='Скопировано';setTimeout(function(){b.textContent='Скопировать'},1500)}function fb(){var r=document.createRange();r.selectNodeContents(el);var s=getSelection();s.removeAllRanges();s.addRange(r);try{document.execCommand('copy');done()}catch(e){}s.removeAllRanges()}if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(done,function(){fb()})}else{fb()}})});
-</script>"""
+# Copy-to-clipboard helper (0.1.6+). Served as /static/copy.js and included
+# via <script src> (COPY_TAG): the CSP header (script-src 'self', 0.1.8+)
+# blocks inline scripts, so this MUST NOT be inlined into pages.
+COPY_JS = """function awgCopyText(t){if(navigator.clipboard&&navigator.clipboard.writeText){return navigator.clipboard.writeText(t)}return Promise.reject(new Error('no clipboard API'))}
+function awgCopyFallback(t){return new Promise(function(res,rej){var ta=document.createElement('textarea');ta.value=t;ta.setAttribute('readonly','');ta.style.position='fixed';ta.style.top='0';ta.style.left='0';ta.style.opacity='0';document.body.appendChild(ta);ta.focus();ta.select();try{var ok=document.execCommand('copy');document.body.removeChild(ta);if(ok){res()}else{rej(new Error('execCommand false'))}}catch(e){try{document.body.removeChild(ta)}catch(_){}rej(e)}})}
+function awgCopy(t){var p;try{p=awgCopyText(t)}catch(e){p=Promise.reject(e)}var to=new Promise(function(_,rej){setTimeout(function(){rej(new Error('timeout'))},3000)});return Promise.race([p,to]).catch(function(){return awgCopyFallback(t)})}
+function awgBindCopy(){document.querySelectorAll('button[data-src]').forEach(function(b){if(b.getAttribute('data-awg-bound')){return}b.setAttribute('data-awg-bound','1');b.addEventListener('click',function(){var el=document.getElementById(b.getAttribute('data-src'));if(!el){return}awgCopy(el.textContent).then(function(){b.textContent='Скопировано';setTimeout(function(){b.textContent='Скопировать'},1500)},function(){b.textContent='Не скопировалось';setTimeout(function(){b.textContent='Скопировать'},1500)})})})}
+if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',awgBindCopy)}else{awgBindCopy()}
+"""
+COPY_TAG = '<script src="/static/copy.js" defer></script>'
 
 
 STYLE_CSS = """*{box-sizing:border-box}body{margin:0;font:14px/1.45 system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#eef1f5;color:#1f2937;display:flex;min-height:100vh;overflow-x:hidden}
