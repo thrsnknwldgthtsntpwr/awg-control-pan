@@ -355,6 +355,14 @@ class TestClientPage(unittest.TestCase):
         self.assertIn("navigator.clipboard.writeText", body)
         self.assertIn("execCommand('copy')", body)
 
+    def test_buttons_unified_font(self):
+        from awg_panel.server import STYLE_CSS
+        rule = STYLE_CSS.split("button,.btn{", 1)[1].split("}", 1)[0]
+        # <button> uses the UA default font, <a class=btn> inherits the page
+        # font — without font:inherit they render at different sizes.
+        self.assertIn("font:inherit", rule)
+        self.assertIn("padding:8px 14px", rule)
+
     def test_no_page_level_hscroll_css(self):
         from awg_panel.server import STYLE_CSS
         self.assertIn("body{", STYLE_CSS)
