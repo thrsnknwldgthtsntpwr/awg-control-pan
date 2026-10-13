@@ -115,7 +115,11 @@ class TestManage(unittest.TestCase):
         self.assertEqual(cmd[yi + 1], "--expires=7d")
         self.assertEqual(cmd[yi + 2], "add")
         sudoers = (Path(__file__).resolve().parents[1] / "packaging" / "sudoers").read_text()
-        self.assertIn("--expires=* add *", sudoers)
+        # Portable sudoers: single trailing `*` after --yes (embedded wildcards
+        # like --expires=* are rejected by sudo-rs). Must cover expires order.
+        rules = [l for l in sudoers.splitlines() if l.strip() and not l.strip().startswith("#")]
+        self.assertTrue(any(l.rstrip().endswith("--yes *") for l in rules))
+        self.assertFalse(any("--expires=" in l for l in rules))
 
     def test_sudoers_helper_enumerated(self):
         txt = (Path(__file__).resolve().parents[1] / "packaging" / "sudoers").read_text()

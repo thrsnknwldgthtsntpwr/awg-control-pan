@@ -1,13 +1,16 @@
 # Least-privilege for awgpanel user (variant 1b). Managed by .deb.
 # Panel may only: run manage subcommands used by UI + read live files via helper.
-Defaults:awgpanel !requiretty, env_reset
+# NOTE: validated with `visudo -c` on both classic sudo and sudo-rs.
+Defaults:awgpanel env_reset
 awgpanel ALL=(root) NOPASSWD: /bin/bash /root/awg/manage_amneziawg.sh --json --no-color list
 awgpanel ALL=(root) NOPASSWD: /bin/bash /root/awg/manage_amneziawg.sh --json --no-color stats
 awgpanel ALL=(root) NOPASSWD: /bin/bash /root/awg/manage_amneziawg.sh --json --no-color check
-# NOTE: --expires flag sits between --yes and add (manage argparse order),
-# so both bare and --expires variants must be allowed, else add-with-days fails.
-awgpanel ALL=(root) NOPASSWD: /bin/bash /root/awg/manage_amneziawg.sh --json --no-color --yes add *
-awgpanel ALL=(root) NOPASSWD: /bin/bash /root/awg/manage_amneziawg.sh --json --no-color --yes --expires=* add *
+# NOTE: single trailing `*` covers both `add <names>` and `--expires=Nd add <names>`
+# (manage argparse order: flags before subcommand). Embedded wildcards like
+# `--expires=*` are rejected by sudo-rs (now default on newer Ubuntu), so they
+# must NOT be used here even though classic sudo accepts them. The pinned prefix
+# (binary + script + --json --no-color --yes) still confines this to manage args.
+awgpanel ALL=(root) NOPASSWD: /bin/bash /root/awg/manage_amneziawg.sh --json --no-color --yes *
 awgpanel ALL=(root) NOPASSWD: /bin/bash /root/awg/manage_amneziawg.sh --json --no-color --yes remove *
 awgpanel ALL=(root) NOPASSWD: /bin/bash /root/awg/manage_amneziawg.sh --json --no-color --yes regen *
 # Helper enumerated explicitly (no blanket `helper *`): each arg shape pinned,
