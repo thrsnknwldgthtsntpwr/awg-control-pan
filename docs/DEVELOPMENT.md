@@ -18,9 +18,9 @@ python3 -m unittest discover -s tests -v
 ## Проверки перед коммитом
 
 ```bash
-python3 -m py_compile src/awg_panel/*.py
+python3 -m py_compile src/awg_panel/*.py bin/awg-panel-set-password
 python3 -m unittest discover -s tests -v
-bash -n bin/awg-panel-helper bin/awg-panel-set-password packaging/DEBIAN/postinst build_deb.sh
+bash -n bin/awg-panel-helper packaging/DEBIAN/postinst build_deb.sh
 # если есть sudo + visudo:
 sudo visudo -c -f packaging/sudoers
 ```

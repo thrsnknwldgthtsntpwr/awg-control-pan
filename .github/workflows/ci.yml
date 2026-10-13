@@ -12,10 +12,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Lint (py_compile + shellcheck + visudo)
         run: |
-          python3 -m py_compile src/awg_panel/*.py
+          python3 -m py_compile src/awg_panel/*.py bin/awg-panel-set-password
           python3 -m unittest discover -s tests -v
           bash -n bin/awg-panel-helper
-          bash -n bin/awg-panel-set-password
-          bash -n packaging/DEBIAN/postinst
-          bash -n build_deb.sh
+          bash -n packaging/DEBIAN/postinst packaging/DEBIAN/prerm packaging/DEBIAN/postrm build_deb.sh
           sudo visudo -c -f packaging/sudoers
