@@ -37,7 +37,7 @@
 ## Установка поверх живого сервера
 
 ```
-sudo dpkg -i awg-panel_0.1.0_all.deb
+sudo dpkg -i awg-panel_0.1.1_all.deb
 # postinst НЕ трогает /root/awg и /etc/amnezia — только свои файлы.
 # Пароль покажет apt-вывод + /root/.awg-panel-initial-password (600).
 # Открыть: https://<server>:8443/  (self-signed — подтвердить исключение)
