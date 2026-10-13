@@ -358,7 +358,7 @@ class Handler(BaseHTTPRequestHandler):
         hs_s = datetime.datetime.fromtimestamp(hs).strftime("%d.%m.%Y %H:%M") if hs else "никогда"
         return self._layout(name, "clients",
             f"<h1><a href=/clients>Клиенты</a> / {e(name)}</h1>"
-            "<div class=grid>"
+            "<div class=stack>"
             f"<div class=card><h2>Пир</h2><table>"
             f"<tr><th>IP</th><td>{e(info.get('ip','?'))} {e(info.get('client_ipv6','') or '')}</td></tr>"
             f"<tr><th>Статус</th><td>{e(info.get('status','?'))}</td></tr>"
@@ -367,14 +367,14 @@ class Handler(BaseHTTPRequestHandler):
             f"<tr><th>Handshake</th><td>{e(hs_s)}</td></tr>"
             "</table>"
             f"<form method=post action=/clients/regen class=row><input type=hidden name=csrf value='{e(csrf0)}'>"
-            f"<input type=hidden name=sel value='{e(name)}'><button>Пересоздать файлы</button></form>"
+            f"<input type=hidden name=sel value='{e(name)}'><button>Пересоздать</button></form>"
             f"<p><a class=btn href='/download?name={urllib.parse.quote(name)}&type=conf'>Скачать .conf</a> "
-            f"<a class=btn href='/client-qr?name={urllib.parse.quote(name)}'>QR (png)</a></p></div>"
-            f"<div class=card><h2>Конфиг</h2><pre>{e(conf_txt)}</pre>"
-            + (f"<h2>vpn://</h2><pre class=wrap>{e(uri_txt)}</pre>" if uri_txt else "")
-            + (f"<h2>QR</h2><img src='/client-qr?name={urllib.parse.quote(name)}' alt=QR style='max-width:260px'>"
+            f"<a class=btn target=_blank rel=noopener href='/client-qr?name={urllib.parse.quote(name)}'>QR.png</a></p></div>"
+            f"<div class=card><h2>Конфиг</h2><pre class=conf>{e(conf_txt)}</pre></div>"
+            + (f"<div class=card><h2>vpn://</h2><pre class=wrap>{e(uri_txt)}</pre></div>" if uri_txt else "")
+            + (f"<div class=card><h2>QR</h2><img src='/client-qr?name={urllib.parse.quote(name)}' alt=QR style='max-width:260px'></div>"
                if rc1 == 0 else "")
-            + "</div></div>", csrf0)
+            + "</div>", csrf0)
 
     # ---------- HTTP verbs ----------
     def do_GET(self):
@@ -528,18 +528,19 @@ def hmac_eq(a: str, b: str) -> bool:
     return _h.compare_digest(a, b)
 
 
-STYLE_CSS = """*{box-sizing:border-box}body{margin:0;font:14px/1.45 system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#eef1f5;color:#1f2937;display:flex;min-height:100vh}
+STYLE_CSS = """*{box-sizing:border-box}body{margin:0;font:14px/1.45 system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#eef1f5;color:#1f2937;display:flex;min-height:100vh;overflow-x:hidden}
 aside{width:220px;background:#1f2937;color:#cbd5e1;display:flex;flex-direction:column;padding:18px 0;flex-shrink:0}
 .brand{color:#fff;font-weight:700;font-size:18px;padding:0 20px 16px}.brand small{display:block;color:#94a3b8;font-weight:400;font-size:11px}
 nav a{display:block;color:#cbd5e1;text-decoration:none;padding:10px 20px}nav a.on,nav a:hover{background:#374151;color:#fff}
 nav form.navlogout{margin:0;padding:0}nav button.navlink{display:block;width:100%;text-align:left;background:none;border:0;color:#cbd5e1;padding:10px 20px;font:inherit;cursor:pointer;border-radius:0}nav button.navlink.on,nav button.navlink:hover{background:#374151;color:#fff}
-main{flex:1;padding:24px;max-width:1200px}h1{margin:0 0 16px;font-size:22px}.card{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:16px}
+main{flex:1;padding:24px;max-width:1200px;min-width:0;overflow-x:hidden}h1{margin:0 0 16px;font-size:22px}.card{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:16px;min-width:0;max-width:100%}
 table{width:100%;border-collapse:collapse;background:#fff}th,td{border:1px solid #e2e8f0;padding:8px;text-align:left;font-size:13px}th{background:#f1f5f9}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.row{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.grid>*{min-width:0}.stack{display:flex;flex-direction:column;gap:16px}.stack>.card{margin-bottom:0}.row{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
 input{padding:8px;border:1px solid #cbd5e1;border-radius:6px}button,.btn{background:#e2e8f0;border:1px solid #cbd5e1;border-radius:6px;padding:8px 14px;cursor:pointer;text-decoration:none;color:#111;display:inline-block}
 button:hover,.btn:hover{background:#cbd5e1}.tabs{margin-bottom:12px}.tabs a{padding:6px 14px;border:1px solid #cbd5e1;text-decoration:none;color:#111;background:#fff}.tabs a.on{background:#1f2937;color:#fff}
 .err{color:#b91c1c}.ok{color:#15803d}.warn{color:#b45309}.muted{color:#64748b;font-size:12px}.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
-pre{background:#0f172a;color:#e2e8f0;padding:12px;border-radius:6px;overflow:auto;font-size:12px}pre.wrap{white-space:pre-wrap;word-break:break-all}
+pre{background:#0f172a;color:#e2e8f0;padding:12px;border-radius:6px;overflow:auto;max-width:100%;font-size:12px}pre.wrap{white-space:pre-wrap;word-break:break-all}
+img{max-width:100%}
 label{display:block;margin:8px 0}input[name=user],input[name=password],input[name=names]{width:100%}
 @media(max-width:800px){aside{width:150px}.grid{grid-template-columns:1fr}}
 """

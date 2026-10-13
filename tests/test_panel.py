@@ -277,5 +277,72 @@ class TestPackaging(unittest.TestCase):
         )
 
 
+class TestClientPage(unittest.TestCase):
+    def _render_client(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        from awg_panel import server as srv
+        from awg_panel.config import PanelConfig
+        from awg_panel.manage import ManageResult
+        h = srv.Handler.__new__(srv.Handler)
+        h.cfg = PanelConfig()
+        long_line = "Endpoint = 1.2.3.4:51820 # " + "A" * 500
+        conf = ("[Interface]\nPrivateKey = " + "B" * 60 + "\n"
+                f"{long_line}\n[Peer]\nPublicKey = " + "C" * 60 + "\n")
+        uri = "vpn://awg@" + "D" * 500
+        with mock.patch.object(srv.Handler, "_sess",
+                               lambda self: SimpleNamespace(csrf="t")), \
+             mock.patch.object(srv, "cmd_list", lambda ms: ManageResult(
+                 True, 0, [{"name": "alice", "ip": "10.0.0.2",
+                            "status": "active", "expires_at": None}], "")), \
+             mock.patch.object(srv, "cmd_stats", lambda ms: ManageResult(
+                 True, 0, [{"name": "alice", "rx": 1, "tx": 2,
+                            "last_handshake": 0}], "")), \
+             mock.patch.object(srv, "run_helper") as rh:
+            def side_effect(helper, *args, **kw):
+                if args[:1] == ("client-conf",):
+                    return 0, conf.encode(), ""
+                if args[:1] == ("client-uri",):
+                    return 0, (uri + "\n").encode(), ""
+                return 1, b"", "no"
+            rh.side_effect = side_effect
+            return h._page_client("alice")
+
+    def test_blocks_stacked_peer_conf_vpn_qr(self):
+        body = self._render_client()
+        self.assertIn("class=stack", body)
+        self.assertNotIn("class=grid", body)
+        i_peer = body.index("<h2>Пир</h2>")
+        i_conf = body.index("<h2>Конфиг</h2>")
+        i_vpn = body.index("<h2>vpn://</h2>")
+        i_qr = body.index("<h2>QR</h2>")
+        self.assertLess(i_peer, i_conf)
+        self.assertLess(i_conf, i_vpn)
+        self.assertLess(i_vpn, i_qr)
+
+    def test_peer_buttons_and_qr_new_window(self):
+        body = self._render_client()
+        peer = body[body.index("<h2>Пир</h2>"):body.index("<h2>Конфиг</h2>")]
+        self.assertIn(">Пересоздать<", peer)
+        self.assertIn("Скачать .conf", peer)
+        self.assertIn("QR.png", peer)
+        self.assertIn("target=_blank", peer)
+        self.assertIn("/client-qr?name=alice", peer)
+        # each block is its own card
+        self.assertEqual(body.count("<div class=card>"), 4)
+
+    def test_no_page_level_hscroll_css(self):
+        from awg_panel.server import STYLE_CSS
+        self.assertIn("body{", STYLE_CSS)
+        self.assertIn("overflow-x:hidden", STYLE_CSS)
+        self.assertIn(".grid>*{min-width:0}", STYLE_CSS)
+        self.assertIn("min-width:0", STYLE_CSS)
+        # overflowing element itself scrolls internally
+        self.assertIn("pre{", STYLE_CSS)
+        pre_rule = STYLE_CSS.split("pre{", 1)[1].split("}", 1)[0]
+        self.assertIn("overflow:auto", pre_rule)
+        self.assertIn("max-width:100%", pre_rule)
+
+
 if __name__ == "__main__":
     unittest.main()
