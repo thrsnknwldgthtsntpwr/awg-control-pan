@@ -3,3 +3,11 @@ __pycache__/
 *.pyo
 dist/
 *.deb
+# Внутренняя память агентских сессий — не для GitHub
+MEMORY.md
+.access_test.tmp
+# Локальные артефакты сборки/IDE
+.venv/
+*.log
+.vscode/
+.idea/

@@ -1,126 +1,360 @@
-# awg-panel — веб-интерфейс поверх amneziawg-installer
+# awg-panel — веб-интерфейс для AmneziaWG
 
-Версия: **0.1.9**.
+[![build-deb](https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/actions/workflows/build-deb.yml/badge.svg)](https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/actions/workflows/build-deb.yml)
+[![ci](https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/actions/workflows/ci.yml/badge.svg)](https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/actions/workflows/ci.yml)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
+![Platform](https://img.shields.io/badge/platform-debian%20%7C%20ubuntu-lightgrey)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Version](https://img.shields.io/badge/version-0.1.9-blue)
 
-Минималистичная вебка в стиле роутера. Underlay — только команды
-`manage_amneziawg.sh` из https://github.com/bivlked/amneziawg-installer
-плюс `/proc` для состояния сервера. Своей БД пользователей VPN нет.
+Минималистичная веб-панель в стиле роутера поверх
+[bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer).
+Без своей базы VPN-пользователей: живой статус читается из `manage_amneziawg.sh --json`
+и `/proc`, клиенты создаются/удаляются тем же `manage`-скриптом.
 
-## Что умеет (фаза 1, по вашим ответам)
+> Язык интерфейса: русский. Язык документов репозитория: русский.
 
-- Слева: **Статус / Клиенты / Выход**. Справа — контент.
-- Статус: вкладки **Сервер** (CPU/RAM/disk/uptime/load/интерфейсы из `/proc`)
-  и **AWG** (`manage check --json` + маркеры `AWG_PROTOCOL`/`SCRIPT_VERSION`).
-- Клиенты: таблица из `manage list --json` + `stats --json` + префиксы ключей
-  из `awg0.conf` (колонки как `list --verbose`: имя/IP/ключ/статус/RX-TX/срок).
-  Чекбоксы, массовое удаление, кнопки **Добавить / Удалить**.
-  Regen («Пересоздать») — кнопка внутри карточки клиента
-  (эндпоинт держит и множественный выбор, UI множественный regen не предлагает).
-  Имя — ссылка в карточку: блоки Пир / Конфиг / `vpn://` / QR сверху вниз,
-  кнопки «Скопировать» у Конфига и `vpn://`, QR открывается в новой вкладке.
-- Срок при добавлении — только днями (пусто = бессрочно, max 3650), удаление истекших — крон инсталлера.
-- Auth: логин/пароль из `/etc/awg-panel/config.ini`
-  (`webusername`/`webpassword`, дефолт `admin`/`admin`),
-  сессии в памяти (sliding TTL из `session_ttl_min`, абсолютный лимит 12 ч,
-  max 1000 сессий), журнал в `/var/log/awg-panel/auth.log` (0600, без переводов строк).
-  TOTP/2FA/API — нет.
-- Стек: Python3 stdlib (`http.server`, встроенный HTTPS), чистый SSR
-  (формы работают без JS; внешний HTMX/CDN удалён в 0.1.8). Кнопки
-  «Скопировать» работают через крошечный same-origin `/static/copy.js`
-  (инлайн-`<script>` запрещён CSP `script-src 'self'` с 0.1.8, в 0.1.9 скрипт
-  вынесен из страницы в статику). Стороннего веб-сервера нет.
-- Привилегии: сервис работает от `root` и вызывает `manage`/`helper` напрямую
-  без sudo (manage сам требует root: wg/iptables/конфиги). UFW/iptables не трогаем.
-  Файл `/etc/sudoers.d/awg-panel` остался только как legacy для старых установок.
-- Порт/хост/логин/пароль — в `/etc/awg-panel/config.ini`
-  (`host`/`port`/`webusername`/`webpassword`, дефолт `0.0.0.0:8443` + `admin`/`admin`).
+---
 
-## Файлы проекта
+## Содержание
 
-- `src/awg_panel/` — `server.py` (роуты+HTML+статика `/static/style.css`,
-  `/static/copy.js`), `manage.py` (обёртка `--json`),
-  `system_info.py` (`/proc`), `auth.py`, `config.py`, `validate.py`,
-  `__main__.py` (точка входа), `__init__.py` (версия)
-- `bin/awg-panel-helper` — безопасные чтения live-файлов (валидация имён,
-  серверный `PrivateKey` никогда не отдаётся)
-- `bin/awg-panel-set-password` — смена логина/пароля в config.ini
-  (старый `awg-panel-set-password-internal` и `/etc/awg-panel/password` удалены в 0.1.4)
-- `packaging/` — `DEBIAN/{control,conffiles,postinst,prerm,postrm}`,
-  `awg-panel.service`, `sudoers`, `config.ini.example`
-- `build_deb.sh`, `.github/workflows/build-deb.yml` (сборка + релиз .deb на GitHub)
+- [Возможности](#возможности)
+- [Как это выглядит](#как-это-выглядит)
+- [Быстрый старт](#быстрый-старт)
+- [Требования](#требования)
+- [Установка](#установка)
+- [Конфигурация](#конфигурация)
+- [Использование](#использование)
+- [Архитектура](#архитектура)
+- [Структура проекта](#структура-проекта)
+- [Безопасность](#безопасность)
+- [Разработка](#разработка)
+- [Диагностика](#диагностика)
+- [FAQ](#faq)
+- [Changelog и релизы](#changelog-и-релизы)
+- [Участие в разработке](#участие-в-разработке)
+- [Лицензия](#лицензия)
+- [Благодарности](#благодарности)
 
-## Установка поверх живого сервера
+---
 
+## Возможности
+
+| Раздел | Что умеет |
+|--------|-----------|
+| **Статус → Сервер** | Uptime, load average, CPU, RAM, диск `/`, счётчики интерфейсов из `/proc`. Без вызова `manage`. |
+| **Статус → AWG** | `manage check --json` + маркеры `AWG_PROTOCOL` / `SCRIPT_VERSION`: юнит, интерфейс `awg0`, порт, модуль, число пиров, UFW (только чтение). |
+| **Клиенты** | Таблица как `manage list --verbose`: имя, IP, префикс ключа, статус, RX/TX (`stats --json`), срок. Чекбоксы, массовое удаление, добавление нескольких имён разом. |
+| **Карточка клиента** | Блоки сверху вниз: **Пир → Конфиг → vpn:// → QR**. Кнопки: Пересоздать, Скачать `.conf`, `QR.png` (в новой вкладке), Скопировать для Конфига и `vpn://`. |
+| **Сроки** | При добавлении — только днями (`1..3650`, пусто = бессрочно). Чистку истёкших делает крон инсталлера. |
+| **Авторизация** | Один администратор, логин/пароль из `config.ini`. Сессии в памяти (sliding TTL + абсолютный лимит 12 ч), журнал входов в файл. Без 2FA/API — осознанно, см. [SECURITY.md](SECURITY.md). |
+| **Стек** | Только Python 3 stdlib (`http.server` + встроенный HTTPS). Чистый SSR — формы работают без JS. Единственный JS — same-origin `/static/copy.js` для кнопок «Скопировать». Без nginx, без CDN. |
+
+Что панель **не делает** (и не будет без обсуждения в Issues):
+
+- не хранит VPN-пользователей в своей БД;
+- не трогает UFW/iptables;
+- не трогает `/root/awg` и `/etc/amnezia` при установке — только свои файлы;
+- не показывает `awg show dump` целиком (там PSK) и никогда не отдаёт серверный `PrivateKey` в браузер.
+
+---
+
+## Как это выглядит
+
+Навигация слева: **Статус / Клиенты / Выход**. Справа — контент.
+
+- `/status?tab=server` — две карточки: «Система» и «Интерфейсы» + последние 10 строк журнала входов.
+- `/status?tab=awg` — одна карточка «AWG» с таблицей из 8 строк (юнит, интерфейс, порт, модуль, пиры, UFW, поколение, версия установщика).
+- `/clients` — форма добавления (`имена через пробел/запятую` + `дней`), таблица, кнопка «Удалить выбранные». Имя — ссылка в карточку.
+- `/client?name=alice` — карточка клиента (Пир / Конфиг / `vpn://` / QR).
+
+Скриншоты пока не приложены — панель ставится за 2 минуты на тестовый VPS, см. [Быстрый старт](#быстрый-старт).
+
+---
+
+## Быстрый старт
+
+На сервере, где уже стоит `amneziawg-installer`:
+
+```bash
+# 1. Скачать .deb из Releases (например v0.1.9)
+wget https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases/download/v0.1.9/awg-panel_0.1.9_all.deb
+
+# 2. Установить (именно dpkg — без предупреждения _apt о песочнице)
+sudo dpkg -i awg-panel_0.1.9_all.deb
+
+# 3. Сменить пароль и открыть панель
+sudo awg-panel-set-password
+sudo systemctl restart awg-panel
+# открыть https://<IP-сервера>:8443/ (self-signed — подтвердить исключение)
 ```
-# Рекомендуется dpkg (без _apt-предупреждения, см. ниже):
+
+Проверка:
+
+```bash
+sudo systemctl status awg-panel --no-pager
+sudo journalctl -u awg-panel -n 30 --no-pager
+```
+
+Подробно со всеми вариантами — [docs/INSTALL.md](docs/INSTALL.md).
+
+---
+
+## Требования
+
+- **ОС:** Debian 11+ / Ubuntu 22.04+ (systemd).
+- **Установленный и настроенный** `amneziawg-installer`:
+  - `/root/awg/manage_amneziawg.sh` (исполняемый),
+  - `/etc/amnezia/amneziawg/awg0.conf`,
+  - `/root/awg/awgsetup_cfg.init` (маркеры `AWG_PROTOCOL`, `SCRIPT_VERSION`).
+- **Зависимости .deb:** `python3`, `openssl`, `systemd`. Опционально `qrencode` (QR инсталлер генерит сам, панель только отдаёт `.png`).
+- **Для сборки .deb:** `dpkg-deb`. Для dev-проверок: `python3` (тесты — только stdlib, без pip).
+
+---
+
+## Установка
+
+```bash
 sudo dpkg -i awg-panel_*_all.deb
-# postinst НЕ трогает /root/awg и /etc/amnezia — только свои файлы.
 ```
 
-Что дальше (то же самое печатает postinst в конце установки):
+- `postinst` **не трогает** `/root/awg` и `/etc/amnezia` — только `/etc/awg-panel/`, `/var/log/awg-panel/`, ключи/сертификат, systemd-юнит.
+- После установки `postinst` печатает памятку «что дальше» (пароль → URL → проверки).
+- Про безвредное предупреждение `N: Загрузка выполняется от лица суперпользователя...` и про восстановление `sudo` после битого `0.1.1` — см. [docs/INSTALL.md](docs/INSTALL.md) и [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
-1. Логин/пароль: `/etc/awg-panel/config.ini` (`webusername`/`webpassword`,
-   дефолт `admin`/`admin`). Сменить: `sudo awg-panel-set-password`
-   (или правка config.ini вручную), после правок —
-   `sudo systemctl restart awg-panel`.
-2. Открыть: `https://<IP-сервера>:8443/` (self-signed — подтвердить исключение).
-   Проверка: `sudo systemctl status awg-panel --no-pager`,
-   `sudo journalctl -u awg-panel -n 30 --no-pager`.
+Обновление — тем же `dpkg -i` новым `.deb` поверх. Конфиг `/etc/awg-panel/config.ini` сохраняется (conffile), недостающие ключи дописываются дефолтами.
 
-Про предупреждение apt при установке локального .deb:
+Удаление:
 
-```
-N: Загрузка выполняется от лица суперпользователя без ограничений песочницы,
-так как файл «.../awg-panel_*_all.deb» недоступен для пользователя «_apt».
+```bash
+sudo apt remove awg-panel       # конфиг и логи остаются
+sudo apt purge awg-panel        # удалить всё включая конфиг
 ```
 
-Это безвредно: файл лежит в `$HOME`, куда у `_apt` нет доступа, и apt
-дочитывает его как root. Чтобы не видеть его — ставить через
-`sudo dpkg -i` (выше) либо скопировать .deb в доступное место:
-`cp awg-panel_*_all.deb /tmp/ && sudo apt install /tmp/awg-panel_*_all.deb`.
+---
 
-Восстановление sudo после 0.1.1: выпуск 0.1.1 привёз
-`/etc/sudoers.d/awg-panel` с владельцем uid 1001, такой файл ломает ВЕСЬ
-sudo (`... is owned by uid 1001, should be 0`). Починить как root
-(через консоль/`su -`/`pkexec`, т.к. сам sudo не работает):
+## Конфигурация
 
-```
-su -
-chown root:root /etc/sudoers.d/awg-panel
-chmod 440 /etc/sudoers.d/awg-panel
-visudo -c
-```
+Единственный конфиг: `/etc/awg-panel/config.ini` (`600`, `root:root`). Полный справочник — [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
-После этого поставить 0.1.2+: там сборка идёт с `--root-owner-group`,
-а postinst при каждом upgrade/reinstall сам чинит владельца/права.
+| Ключ (`[server]`) | Дефолт | Что значит |
+|-------------------|--------|------------|
+| `host` | `0.0.0.0` | На каком адресе слушать. |
+| `port` | `8443` | Порт HTTPS. `1..65535`. |
+| `cert` / `key` | `/etc/awg-panel/cert.pem` / `key.pem` | Self-signed создаёт `postinst` (`key.pem` — `600`). |
+| `webusername` / `webpassword` | `admin` / `admin` | Логин/пароль панели. `%` разрешён, пробелы в пароле значимы. |
+| `session_ttl_min` | `30` | Sliding TTL сессии, `1..1440`. Абсолютный лимит — 12 ч (в коде). |
+| `manage_script` | `/root/awg/manage_amneziawg.sh` | Путь к underlay-скрипту. |
+| `server_conf` | `/etc/amnezia/amneziawg/awg0.conf` | Только для чтения префиксов публичных ключей. |
+| `helper` | `/usr/sbin/awg-panel-helper` | Безопасные чтения live-файлов. |
+| `auth_log` | `/var/log/awg-panel/auth.log` | Журнал входов (`600`, без переводов строк в полях). |
 
-## Безопасность (честно)
+Смена пароля:
 
-- Приватный ключ сервера из `awg0.conf` в браузер не отдаётся никогда
-  (helper публикует только `#_Name`/`PublicKey`).
-- Приватные ключи клиентов видит админ панели — так же, как root через manage.
-- `awg show dump` целиком не показываем (там PSK).
-- Все POST — с CSRF (constant-time, без падений на non-ASCII), редиректы после
-  POST — `303`, кука `Secure; HttpOnly; SameSite=Lax`, rate-limit логина 5/5мин
-  по socket-IP (`X-Forwarded-For` игнорируется).
-- Заголовки: `nosniff/DENY/no-referrer` + `CSP default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'`, `HSTS`, `Permissions-Policy`.
-- Лимиты: тело форм 1 МиБ (с закрытием соединения на `413`), max 2000 полей,
-  max 100 имён в батче (`add/remove/regen`), stdout manage до 1 МиБ, ответы
-  helper до 2 МиБ, таймаут соединения 10 с, лимит ожидания manage-фьючерсов.
-- `manage`/`helper` вызываются списком аргументов (без shell), имена —
-  `^[A-Za-z0-9_-]{1,63}$`, `expires` проверяется внутри (`^--expires=\d+d$`,
-  1..3650), helper держит allowlist команд и режет symlink/`PATH` зажат.
-- Пароль в `config.ini` в clear (600, root-only, атомарная запись через
-  `mkstemp+replace`); `%` в пароле разрешён (`interpolation=None`), пробелы
-  по краям не режутся; битый ini даёт дефолты, а не падение сервиса.
-- `key.pem` создаётся под `umask 077` (без окна 644), `config.ini` ставится
-  сразу `600`. Ошибки manage/helper в UI обобщены, детали — только в stderr сервиса.
-
-## Проверка на dev-машине
-
-```
-python -m unittest discover -s tests -v
+```bash
+sudo awg-panel-set-password          # интерактивно, атомарная запись 0600
+sudo systemctl restart awg-panel     # применить
 ```
 
-Полный e2e — только на VPS с установленным инсталлером
-(нужны `/root/awg/manage_amneziawg.sh`, `/etc/amnezia/.../awg0.conf`).
+Пример — [packaging/config.ini.example](packaging/config.ini.example).
+
+---
+
+## Использование
+
+### Статус
+
+- **Сервер** — моментальный срез `/proc`: uptime, load, CPU%, RAM used/total, диск `/`, таблица интерфейсов (RX/TX — счётчики с загрузки, не скорость).
+- **AWG** — `manage check --json` + `helper init-info`. Если `manage` упал — страница честно пишет `rc=...`, детали только в `journalctl` (не в браузер).
+
+### Клиенты
+
+- Добавление: `имена через пробел/запятую`, имя — `^[A-Za-z0-9_-]{1,63}$`, срок — `дней (пусто=∞)`, max 100 имён за раз.
+- Удаление: чекбоксы + «Удалить выбранные» (тоже max 100).
+- Пересоздание ключей («Пересоздать») — только из карточки клиента, по одному. Эндпоинт технически принимает батч, UI батч-regen не предлагает (защита от случайного слома всех конфигов разом).
+
+### Карточка клиента
+
+```
+/client?name=alice
+```
+
+1. **Пир** — IP (+IPv6), статус, срок, RX/TX, handshake + ряд кнопок: Пересоздать | Скачать .conf | QR.png.
+2. **Конфиг** — `client-conf` + «Скопировать».
+3. **vpn://** — `client-uri` + «Скопировать» (если есть `.vpnuri`).
+4. **QR** — `<img src=/client-qr>` 260px + ссылка «открыть в новой вкладке».
+
+Скачивание:
+
+```
+/download?name=alice&type=conf      # *.conf
+/client-qr?name=alice               # *.png (image/png)
+```
+
+---
+
+## Архитектура
+
+```text
+                    HTTPS :8443 (self-signed)
+  ┌──────────┐   ─────────────────────────▶   ┌─────────────────────┐
+  │ Браузер  │   SSR-формы + 1 same-origin    │  awg-panel (root)   │
+  │ (admin)  │   JS (/static/copy.js)         │  stdlib http.server │
+  └──────────┘   ◀─────────────────────────   └─────────┬───────────┘
+                                                       │ argv, без shell
+                                        ┌──────────────┼──────────────┐
+                                        ▼              ▼              ▼
+                                 manage --json   helper reads     /proc
+                                 add/del/regen   conf/uri/png     cpu/mem/
+                                 list/stats/     pubkeys only     net/dev
+                                 check           init-info
+                                        │              │              │
+                                        ▼              ▼              ▼
+                                   /root/awg/*   awg0.conf (RO)   kernel
+                                 (инсталлер — источник правды, своей БД нет)
+```
+
+Принципы:
+
+- **Underlay-контракт:** `list / stats / check / add / remove / regen` через `manage --json`. Панель не парсит `wg show` сама.
+- **Helper с allowlist:** `client-conf | client-uri | client-qr <name> | server-pubkeys | init-info`. Пути захардкожены, symlink отклоняются, `PATH` зажат, серверный `PrivateKey` не отдаётся никогда.
+- **Параллелизм с таймаутом:** `list + stats + helper` идут через `ThreadPoolExecutor` с общим `FUT_TIMEOUT=40с`.
+- **Fail-closed:** битый `config.ini` → дефолты, а не падение; ошибки `manage` в UI обобщены, детали — в stderr сервиса.
+
+---
+
+## Структура проекта
+
+```text
+awg-control-pan/
+├── src/awg_panel/
+│   ├── __init__.py      # версия (__version__)
+│   ├── __main__.py      # точка входа (python3 -m awg_panel)
+│   ├── server.py        # роуты, сессии, HTML, /static/style.css + /static/copy.js
+│   ├── manage.py        # обёртка manage --json (без shell, капы stdout/батча)
+│   ├── system_info.py   # /proc: cpu/mem/disk/uptime/load/net
+│   ├── auth.py          # 1 админ, сессии в памяти, rate-limit, журнал
+│   ├── config.py        # load_config() с clamp и fail-safe дефолтами
+│   └── validate.py      # имена, expires, parse_names
+├── bin/
+│   ├── awg-panel-helper        # безопасные чтения live-файлов (bash, allowlist)
+│   └── awg-panel-set-password # смена webusername/webpassword (атомарно, 0600)
+├── packaging/
+│   ├── DEBIAN/control, conffiles, postinst, prerm, postrm
+│   ├── awg-panel.service        # systemd-юнит (User=root, см. SECURITY.md почему)
+│   ├── config.ini.example
+│   └── sudoers                  # legacy для старых установок (сервис sudo не использует)
+├── tests/test_panel.py  # unittest, только stdlib (30 тестов на 0.1.9)
+├── build_deb.sh         # сборка .deb (root-owned, без pycache)
+├── docs/                # INSTALL, CONFIGURATION, SECURITY, TROUBLESHOOTING, DEVELOPMENT
+├── .github/workflows/
+│   ├── build-deb.yml    # сборка .deb + Release по тегу v*
+│   └── ci.yml           # py_compile + unittest + bash -n + visudo на push/PR
+├── CHANGELOG.md
+├── CONTRIBUTING.md
+├── SECURITY.md
+└── LICENSE (MIT)
+```
+
+---
+
+## Безопасность
+
+Честная сводка (полная — [SECURITY.md](SECURITY.md)):
+
+- Приватный ключ сервера **никогда** не отдаётся в браузер; `awg show dump` целиком не показываем (там PSK); приватные ключи клиентов видит админ — как root через `manage`.
+- Все POST с CSRF (constant-time), редиректы `303`, кука `Secure; HttpOnly; SameSite=Lax`, rate-limit логина `5/5мин` по socket-IP (`X-Forwarded-For` игнорируется).
+- Заголовки: `nosniff / DENY / no-referrer / CSP default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' / HSTS / Permissions-Policy`.
+- Лимиты: тело форм 1 МиБ (`413` + разрыв keep-alive), max 2000 полей, max 100 имён в батче, stdout manage 1 МиБ, helper 2 МиБ, socket timeout 10 с.
+- Вызовы `manage`/`helper` — списком аргументов без shell; имена `^[A-Za-z0-9_-]{1,63}$`; `expires` — строго `--expires=\d+d`, `1..3650`.
+- Пароль в `config.ini` в открытом виде (`600`, `root-only`, атомарная запись `mkstemp+replace`, `umask 077`); `key.pem` создаётся под `umask 077`.
+- Сервис работает от **root без sudo** — осознанно: `User=awgpanel + sudo` ломался о песочницу systemd (`unable to change to root gid`, `sudoers_audit`) и давал `rc=1` в UI. Детали и разбор — в [SECURITY.md](SECURITY.md#почему-сервис-работает-от-root).
+
+Нашли уязвимость? Не открывайте Issue — см. [SECURITY.md](SECURITY.md#сообщить-об-уязвимости).
+
+---
+
+## Разработка
+
+```bash
+# тесты (только stdlib, без pip/venv)
+python3 -m unittest discover -s tests -v
+
+# 30/30 OK на 0.1.9. Полный e2e — только на VPS с инсталлером
+# (нужны /root/awg/manage_amneziawg.sh и /etc/amnezia/.../awg0.conf)
+```
+
+```bash
+# локальная сборка .deb (нужен dpkg-deb; на Windows — в WSL)
+./build_deb.sh 0.1.9
+# → dist/awg-panel_0.1.9_all.deb
+```
+
+Детали кодстайла, тестов, релизного цикла — [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) и [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Релиз: коммит → `git tag vX.Y.Z` → `git push --tags` → CI `build-deb.yml` собирает `.deb` и прикладывает к GitHub Release.
+
+---
+
+## Диагностика
+
+```bash
+sudo systemctl status awg-panel --no-pager
+sudo journalctl -u awg-panel -n 50 --no-pager
+cat /var/log/awg-panel/auth.log
+```
+
+Частые случаи — [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md):
+
+| Симптом | Куда смотреть |
+|---------|---------------|
+| `manage check failed (rc=1)` / `list failed` | `journalctl -u awg-panel`, права `/root/awg/manage_amneziawg.sh`, запущен ли `awg0` |
+| `TLS load failed ... Permission denied` (старые версии) | Починено в `0.1.4` (сервис от root, `key.pem 600 root:root` + self-heal). Обновитесь. |
+| `sudo ... is owned by uid 1001` (после `0.1.1`) | [TROUBLESHOOTING: sudo сломан](docs/TROUBLESHOOTING.md#sudo-сломан-после-011-is-owned-by-uid-1001) |
+| `N: ... недоступен для пользователя _apt` | Безвредно. Ставьте через `dpkg -i`, см. [INSTALL](docs/INSTALL.md#про-предупреждение-_apt). |
+
+---
+
+## FAQ
+
+**Это форк инсталлера?**
+Нет. Это отдельная панель поверх `bivlked/amneziawg-installer`. Инсталлер — источник правды, панель — тонкий UI.
+
+**Где хранятся клиенты?**
+Там же, где их хранит инсталлер (`/root/awg/*.conf`, `awg0.conf`). Своей БД у панели нет — снесли панель, клиенты остались.
+
+**Можно ли открыть панель в интернет?**
+Технически да (HTTPS + rate-limit + CSP/HSTS), но дефолтный `admin/admin` смените **до** открытия. Идеально — ограничить по IP на фаерволе и держать панель за VPN Jump-хостом. См. [SECURITY.md](SECURITY.md).
+
+**Зачем сервис от root, это не опасно?**
+`manage` сам требует root (wg/iptables/конфиги). Прослойка `awgpanel+sudo` не добавляла безопасности, но ломалась о systemd-песочницу. Компромисс зафиксирован: минимальный юнит (`PrivateTmp` only), вызовы без shell, allowlist helper, капы и таймауты. Разбор — [SECURITY.md](SECURITY.md#почему-сервис-работает-от-root).
+
+**Будут ли multi-user / 2FA / API / WireGuard-manager?**
+Пока нет. Один админ — осознанное упрощение для личного сервера. Хотите — откройте Issue с use-case.
+
+---
+
+## Changelog и релизы
+
+- Кратко: [CHANGELOG.md](CHANGELOG.md).
+- Файлы: [GitHub Releases](https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases) (`.deb` прикладывает CI по тегу `v*`).
+- Старые неработоспособные релизы до `0.1.8` удалены; git-теги `v0.1.1–v0.1.9` оставлены (при нужде `.deb` пересоберёт CI).
+
+---
+
+## Участие в разработке
+
+PR приветствуются. Прочитайте [CONTRIBUTING.md](CONTRIBUTING.md): CRLF запрещён (`.gitattributes` держит LF для `postinst/helper/*.py`), тесты обязательны (`30/30`), коммиты — короткие imperative на английском или русском.
+
+---
+
+## Лицензия
+
+MIT — см. [LICENSE](LICENSE).
+
+---
+
+## Благодарности
+
+- [bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer) — underlay (`manage_amneziawg.sh`), без которого панели не было бы.
+- `qrencode`, `systemd`, `openssl` — за то, что просто работают.
