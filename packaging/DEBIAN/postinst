@@ -29,12 +29,14 @@ case "$1" in
     # admin password (do not overwrite existing)
     if [ ! -f /etc/awg-panel/password ]; then
       PW="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16)"
-      /usr/sbin/awg-panel-set-password-internal "$PW"
+      # NOTE: password via stdin (not argv) so it never appears in `ps aux`.
+      printf '%s' "$PW" | /usr/sbin/awg-panel-set-password-internal
       chmod 640 /etc/awg-panel/password
       chown root:awgpanel /etc/awg-panel/password || true
       echo "awg-panel initial admin password: $PW" >&2
       echo "$PW" > /root/.awg-panel-initial-password
       chmod 600 /root/.awg-panel-initial-password || true
+      unset PW
       echo "Saved to /root/.awg-panel-initial-password (change via: sudo awg-panel-set-password)" >&2
     fi
     # sudoers validate

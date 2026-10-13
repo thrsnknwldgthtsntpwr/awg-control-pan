@@ -4,7 +4,9 @@ from __future__ import annotations
 import datetime
 import html
 import ssl
+import sys
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -15,8 +17,13 @@ from .manage import cmd_add, cmd_check, cmd_list, cmd_regen, cmd_remove, cmd_sta
 from .system_info import cpu_pct, disk_usage, fmt_bytes, load_avg, mem_info, net_dev, uptime_str
 from .validate import expires_flag, parse_names, valid_client_name
 
-HTMX = '<script src="https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js" defer></script>'
+HTMX = ('<script src="https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js" defer '
+        'integrity="sha384-ujb1lZYygJmzgSwoxRggbCHcjc0rB2XoQrxeTUQyRjrOnlCoYta87iKBWq3EsdM2" '
+        'crossorigin="anonymous"></script>')
 CSS = '<link rel="stylesheet" href="/static/style.css">'
+
+# Cap form bodies to avoid OOM on huge POSTs.
+MAX_FORM_BYTES = 1 << 20  # 1 MiB
 
 
 def e(s) -> str:
@@ -43,8 +50,13 @@ class Handler(BaseHTTPRequestHandler):
     auth: AuthStore = None  # set by main()
 
     # ---------- helpers ----------
-    def log_message(self, *a):  # quieter
-        pass
+    def log_message(self, *a):  # quieter: errors to stderr, successful hits silenced
+        try:
+            code = int(str(a[1])) if len(a) > 1 else 0
+        except (TypeError, ValueError):
+            code = 0
+        if code >= 400 or code == 0:
+            sys.stderr.write(f"awg-panel: {self.client_address[0]} {a[0] if a else ''}\n")
 
     def _cookie_sid(self) -> str | None:
         c = self.headers.get("Cookie", "")
@@ -62,7 +74,8 @@ class Handler(BaseHTTPRequestHandler):
         return (self.headers.get("X-Forwarded-For", "").split(",")[0].strip()
                 or self.client_address[0])
 
-    def _send(self, code: int, body: str | bytes, ctype="text/html; charset=utf-8", extra=None):
+    def _send(self, code: int, body: str | bytes, ctype="text/html; charset=utf-8", extra=None,
+                no_store: bool = True):
         if isinstance(body, str):
             body = body.encode("utf-8")
         self.send_response(code)
@@ -71,11 +84,28 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
+        if no_store:
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Pragma", "no-cache")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
+
+    def _send_auth(self, code: int, body: str | bytes, ctype="text/html; charset=utf-8",
+                   extra=None, no_store: bool = True):
+        """Same as _send but refreshes the session cookie (sliding expiry).
+
+        AuthStore.get() extends server-side expiry on every request; without
+        re-issuing Max-Age the browser would drop the cookie while the server
+        still considers the session valid.
+        """
+        s = getattr(self, "_authed", None)
+        extra = dict(extra or {})
+        if s is not None:
+            extra["Set-Cookie"] = self._set_session_cookie(s.sid)
+        return self._send(code, body, ctype, extra, no_store)
 
     def _redirect(self, where: str, cookie: str | None = None):
         h = {"Location": where}
@@ -93,10 +123,19 @@ class Handler(BaseHTTPRequestHandler):
         if not s:
             self._redirect("/login")
             return None
+        self._authed = s
         return s
 
     def _parse_form(self) -> dict:
-        n = int(self.headers.get("Content-Length", 0) or 0)
+        try:
+            n = int(self.headers.get("Content-Length", 0) or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if n < 0:
+            n = 0
+        if n > MAX_FORM_BYTES:
+            # Drain nothing; caller turns this into 413.
+            raise ValueError("form too large")
         raw = self.rfile.read(n).decode("utf-8", "replace") if n else ""
         out = {}
         for k, v in urllib.parse.parse_qsl(raw, keep_blank_values=True):
@@ -117,12 +156,18 @@ class Handler(BaseHTTPRequestHandler):
         return bool(s and tok and hmac_eq(tok, s.csrf))
 
     # ---------- pages ----------
-    def _layout(self, title: str, active: str, body: str) -> str:
-        nav = "".join(
+    def _layout(self, title: str, active: str, body: str, csrf: str = "") -> str:
+        nav_links = "".join(
             f'<a href="{href}" class="{"on" if active==k else ""}">{label}</a>'
             for k, href, label in (("status", "/status", "Статус"),
-                                   ("clients", "/clients", "Клиенты"),
-                                   ("logout", "/logout", "Выход")))
+                                   ("clients", "/clients", "Клиенты")))
+        if active == "logout" or csrf:
+            logout = (f"<form method=post action=/logout class=navlogout>"
+                      f"<input type=hidden name=csrf value='{e(csrf)}'>"
+                      f"<button type=submit class='navlink{' on' if active=='logout' else ''}'>Выход</button></form>")
+        else:
+            logout = '<a href="/logout">Выход</a>'
+        nav = nav_links + logout
         return ("<!doctype html><html lang=ru><head><meta charset=utf-8>"
                 "<meta name=viewport content='width=device-width,initial-scale=1'>"
                 f"<title>{e(title)} — AWG Panel</title>{CSS}{HTMX}</head>"
@@ -140,11 +185,22 @@ class Handler(BaseHTTPRequestHandler):
                            "<code>sudo awg-panel-set-password</code>.</p></div>")
 
     def _page_status(self, tab: str) -> str:
+        s = self._sess()
+        csrf = s.csrf if s else ""
         tabs = (f"<div class=tabs><a href='/status?tab=server' class='{'on' if tab!='awg' else ''}'>Сервер</a>"
                 f"<a href='/status?tab=awg' class='{'on' if tab=='awg' else ''}'>AWG</a></div>")
         if tab == "awg":
-            return self._layout("Статус AWG", "status", f"<h1>Статус</h1>{tabs}{self._awg_block()}")
-        return self._layout("Статус сервера", "status", f"<h1>Статус</h1>{tabs}{self._server_block()}")
+            return self._layout("Статус AWG", "status", f"<h1>Статус</h1>{tabs}{self._awg_block()}", csrf)
+        return self._layout("Статус сервера", "status", f"<h1>Статус</h1>{tabs}{self._server_block()}", csrf)
+
+    def _page_logout(self) -> str:
+        s = self._sess()
+        csrf = s.csrf if s else ""
+        return self._layout("Выход", "logout",
+            "<div class=card style='max-width:420px'><h1>Выйти?</h1>"
+            f"<form method=post action=/logout><input type=hidden name=csrf value='{e(csrf)}'>"
+            "<button>Выйти</button></form>"
+            "<p><a href=/status>Остаться</a></p></div>", csrf)
 
     def _server_block(self) -> str:
         mem = mem_info()
@@ -238,8 +294,14 @@ class Handler(BaseHTTPRequestHandler):
     def _page_clients(self, msg="") -> str:
         s = self._sess()
         csrf = s.csrf if s else ""
-        rl = cmd_list(self.cfg.manage_script)
-        rs = cmd_stats(self.cfg.manage_script)
+        # list/stats/helper run in parallel: sequential timeouts summed to 75s+ before.
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            fl = ex.submit(cmd_list, self.cfg.manage_script)
+            fs = ex.submit(cmd_stats, self.cfg.manage_script)
+            fh = ex.submit(run_helper, self.cfg.helper, "server-pubkeys")
+            rl = fl.result()
+            rs = fs.result()
+            _rc, pk_raw, _e = fh.result()
         clients = rl.data if rl.ok and isinstance(rl.data, list) else []
         stats_map = {}
         if rs.ok and isinstance(rs.data, list):
@@ -269,23 +331,28 @@ class Handler(BaseHTTPRequestHandler):
             "<div class=row><button>Удалить выбранные</button></div>"
             f"{tbl}</form>"
             "<p class=muted>Таблица = manage list --json (+stats, ключи из awg0.conf). "
-            "Удаление множественное чекбоксами. Имя-ссылка → карточка.</p></div>")
+            "Удаление множественное чекбоксами. Имя-ссылка → карточка.</p></div>", csrf)
 
     def _page_client(self, name: str) -> str:
+        s0 = self._sess()
+        csrf0 = s0.csrf if s0 else ""
         if not valid_client_name(name):
-            return self._layout("Клиент", "clients", "<p class=err>bad name</p>")
-        rl = cmd_list(self.cfg.manage_script)
+            return self._layout("Клиент", "clients", "<p class=err>bad name</p>", csrf0)
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            fl = ex.submit(cmd_list, self.cfg.manage_script)
+            fs = ex.submit(cmd_stats, self.cfg.manage_script)
+            f1 = ex.submit(run_helper, self.cfg.helper, "client-conf", name)
+            f2 = ex.submit(run_helper, self.cfg.helper, "client-uri", name)
+            rl = fl.result()
+            rs = fs.result()
+            rc1, conf, _e1 = f1.result()
+            rc2, uri, _e2 = f2.result()
         info = {}
         if rl.ok and isinstance(rl.data, list):
             info = next((c for c in rl.data if c.get("name") == name), {})
-        rs = cmd_stats(self.cfg.manage_script)
         st = next((c for c in (rs.data if rs.ok and isinstance(rs.data, list) else []) if c.get("name") == name), {})
-        rc1, conf, _e1 = run_helper(self.cfg.helper, "client-conf", name)
-        rc2, uri, _e2 = run_helper(self.cfg.helper, "client-uri", name)
         conf_txt = conf.decode("utf-8", "replace") if rc1 == 0 else "(нет .conf — regen?)"
         uri_txt = uri.decode("utf-8", "replace").strip() if rc2 == 0 else ""
-        s = self._sess()
-        csrf = s.csrf if s else ""
         traf = f"{fmt_bytes(st.get('rx',0))} / {fmt_bytes(st.get('tx',0))}" if st else "—"
         hs = st.get("last_handshake", 0) if st else 0
         hs_s = datetime.datetime.fromtimestamp(hs).strftime("%d.%m.%Y %H:%M") if hs else "никогда"
@@ -299,7 +366,7 @@ class Handler(BaseHTTPRequestHandler):
             f"<tr><th>Трафик RX/TX</th><td>{e(traf)}</td></tr>"
             f"<tr><th>Handshake</th><td>{e(hs_s)}</td></tr>"
             "</table>"
-            f"<form method=post action=/clients/regen class=row><input type=hidden name=csrf value='{e(csrf)}'>"
+            f"<form method=post action=/clients/regen class=row><input type=hidden name=csrf value='{e(csrf0)}'>"
             f"<input type=hidden name=sel value='{e(name)}'><button>Пересоздать файлы</button></form>"
             f"<p><a class=btn href='/download?name={urllib.parse.quote(name)}&type=conf'>Скачать .conf</a> "
             f"<a class=btn href='/client-qr?name={urllib.parse.quote(name)}'>QR (png)</a></p></div>"
@@ -307,7 +374,7 @@ class Handler(BaseHTTPRequestHandler):
             + (f"<h2>vpn://</h2><pre class=wrap>{e(uri_txt)}</pre>" if uri_txt else "")
             + (f"<h2>QR</h2><img src='/client-qr?name={urllib.parse.quote(name)}' alt=QR style='max-width:260px'>"
                if rc1 == 0 else "")
-            + "</div></div>")
+            + "</div></div>", csrf0)
 
     # ---------- HTTP verbs ----------
     def do_GET(self):
@@ -316,45 +383,48 @@ class Handler(BaseHTTPRequestHandler):
         if u.path in ("/",):
             return self._redirect("/status")
         if u.path == "/static/style.css":
-            return self._send(200, STYLE_CSS, "text/css; charset=utf-8")
+            return self._send(200, STYLE_CSS, "text/css; charset=utf-8", no_store=False)
         if u.path == "/login":
             return self._send(200, self._page_login())
         if u.path == "/logout":
-            sid = self._cookie_sid()
-            if sid:
-                self.auth.destroy(sid)
-            return self._redirect("/login", self._set_session_cookie(None))
+            # GET never destroys the session (logout-CSRF): shows confirmation,
+            # real logout is POST /logout with CSRF. Unauthed users go to login.
+            s = self._sess()
+            if not s:
+                return self._redirect("/login")
+            self._authed = s
+            return self._send_auth(200, self._page_logout())
         s = self._require_auth()
         if not s:
             return
         if u.path == "/status":
             tab = (q.get("tab", ["server"])[0] or "server")
-            return self._send(200, self._page_status(tab if tab in ("server", "awg") else "server"))
+            return self._send_auth(200, self._page_status(tab if tab in ("server", "awg") else "server"))
         if u.path == "/clients":
-            return self._send(200, self._page_clients())
+            return self._send_auth(200, self._page_clients())
         if u.path == "/client":
-            return self._send(200, self._page_client(q.get("name", [""])[0]))
+            return self._send_auth(200, self._page_client(q.get("name", [""])[0]))
         if u.path == "/client-qr":
             name = q.get("name", [""])[0]
             if not valid_client_name(name):
-                return self._send(400, "bad name", "text/plain")
+                return self._send_auth(400, "bad name", "text/plain")
             rc, data, err = run_helper(self.cfg.helper, "client-qr", name)
             if rc != 0:
-                return self._send(404, "no qr: " + err, "text/plain")
-            return self._send(200, data, "image/png")
+                return self._send_auth(404, "not found", "text/plain")
+            return self._send_auth(200, data, "image/png")
         if u.path == "/download":
             name = q.get("name", [""])[0]
             typ = q.get("type", ["conf"])[0]
             if not valid_client_name(name) or typ not in ("conf", "vpnuri"):
-                return self._send(400, "bad request", "text/plain")
+                return self._send_auth(400, "bad request", "text/plain")
             act = "client-conf" if typ == "conf" else "client-uri"
             rc, data, err = run_helper(self.cfg.helper, act, name)
             if rc != 0:
-                return self._send(404, "missing: " + err, "text/plain")
+                return self._send_auth(404, "not found", "text/plain")
             fn = f"{name}.{'conf' if typ=='conf' else 'vpnuri.txt'}"
-            return self._send(200, data, "application/octet-stream",
+            return self._send_auth(200, data, "application/octet-stream",
                               {"Content-Disposition": f"attachment; filename=\"{fn}\""})
-        return self._send(404, "not found", "text/plain")
+        return self._send_auth(404, "not found", "text/plain")
 
     def do_POST(self):
         u = urllib.parse.urlparse(self.path)
@@ -363,7 +433,10 @@ class Handler(BaseHTTPRequestHandler):
             if self.auth.blocked(ip):
                 self.auth.journal(ip, "admin", False, "rate-limited")
                 return self._send(429, self._page_login("Слишком много попыток, подождите 5 мин"))
-            form = self._parse_form()
+            try:
+                form = self._parse_form()
+            except ValueError:
+                return self._send(413, self._page_login("Форма слишком большая"))
             pw = form.get("password", "")
             if isinstance(pw, list):
                 pw = pw[0] if pw else ""
@@ -378,15 +451,28 @@ class Handler(BaseHTTPRequestHandler):
         s = self._require_auth()
         if not s:
             return
-        form = self._parse_form()
+        try:
+            form = self._parse_form()
+        except ValueError:
+            return self._send_auth(413, "form too large", "text/plain")
+        if u.path == "/logout":
+            # Real logout: CSRF-protected POST. GET only shows confirmation.
+            if not self._check_csrf(form):
+                return self._send_auth(403, "bad csrf", "text/plain")
+            sid = self._cookie_sid()
+            if sid:
+                self.auth.destroy(sid)
+            return self._redirect("/login", self._set_session_cookie(None))
         if not self._check_csrf(form):
-            return self._send(403, "bad csrf", "text/plain")
+            return self._send_auth(403, "bad csrf", "text/plain")
 
-        def sel_list() -> list[str]:
+        def sel_list() -> tuple[list[str], list[str]]:
             v = form.get("sel", [])
             if isinstance(v, str):
                 v = [v]
-            return [x for x in v if valid_client_name(x)]
+            ok = [x for x in v if valid_client_name(x)]
+            bad = [x for x in v if not valid_client_name(x)]
+            return ok, bad
 
         if u.path == "/clients/add":
             names_raw = form.get("names", "")
@@ -397,34 +483,40 @@ class Handler(BaseHTTPRequestHandler):
                 days = days[0]
             ok_names, bad = parse_names(names_raw)
             if bad:
-                return self._send(200, self._page_clients(f"Плохие имена: {', '.join(bad)}"))
+                return self._send_auth(200, self._page_clients(f"Плохие имена: {', '.join(bad)}"))
             if not ok_names:
-                return self._send(200, self._page_clients("Пусто: укажите имена"))
+                return self._send_auth(200, self._page_clients("Пусто: укажите имена"))
             try:
                 flag = expires_flag(days)
             except ValueError as ex:
-                return self._send(200, self._page_clients(str(ex)))
+                return self._send_auth(200, self._page_clients(str(ex)))
             r = cmd_add(self.cfg.manage_script, ok_names, flag)
             if r.ok:
                 return self._redirect("/clients")
-            return self._send(200, self._page_clients(f"add failed rc={r.rc}: {(r.stderr or '')[-500:]}"))
+            return self._send_auth(200, self._page_clients(f"add failed rc={r.rc}: {(r.stderr or '')[-500:]}"))
         if u.path == "/clients/delete":
-            names = sel_list()
+            names, bad = sel_list()
+            if bad:
+                return self._send_auth(200, self._page_clients(f"Плохие имена в выборе: {', '.join(bad)}"))
             if not names:
-                return self._send(200, self._page_clients("Ничего не выбрано"))
+                return self._send_auth(200, self._page_clients("Ничего не выбрано"))
             r = cmd_remove(self.cfg.manage_script, names)
             if r.ok:
                 return self._redirect("/clients")
-            return self._send(200, self._page_clients(f"remove failed rc={r.rc}: {(r.stderr or '')[-500:]}"))
+            return self._send_auth(200, self._page_clients(f"remove failed rc={r.rc}: {(r.stderr or '')[-500:]}"))
         if u.path == "/clients/regen":
-            names = sel_list()
+            names, bad = sel_list()
+            if bad:
+                return self._send_auth(200, self._page_clients(f"Плохие имена в выборе: {', '.join(bad)}"))
             if not names:
-                return self._send(200, self._page_clients("Ничего не выбрано для regen"))
+                return self._send_auth(200, self._page_clients("Ничего не выбрано для regen"))
             r = cmd_regen(self.cfg.manage_script, names)
             if r.ok:
+                if len(names) == 1:
+                    return self._redirect("/client?name=" + urllib.parse.quote(names[0]))
                 return self._redirect("/clients")
-            return self._send(200, self._page_clients(f"regen failed rc={r.rc}: {(r.stderr or '')[-500:]}"))
-        return self._send(404, "not found", "text/plain")
+            return self._send_auth(200, self._page_clients(f"regen failed rc={r.rc}: {(r.stderr or '')[-500:]}"))
+        return self._send_auth(404, "not found", "text/plain")
 
 
 def hmac_eq(a: str, b: str) -> bool:
@@ -436,6 +528,7 @@ STYLE_CSS = """*{box-sizing:border-box}body{margin:0;font:14px/1.45 system-ui,Se
 aside{width:220px;background:#1f2937;color:#cbd5e1;display:flex;flex-direction:column;padding:18px 0;flex-shrink:0}
 .brand{color:#fff;font-weight:700;font-size:18px;padding:0 20px 16px}.brand small{display:block;color:#94a3b8;font-weight:400;font-size:11px}
 nav a{display:block;color:#cbd5e1;text-decoration:none;padding:10px 20px}nav a.on,nav a:hover{background:#374151;color:#fff}
+nav form.navlogout{margin:0;padding:0}nav button.navlink{display:block;width:100%;text-align:left;background:none;border:0;color:#cbd5e1;padding:10px 20px;font:inherit;cursor:pointer;border-radius:0}nav button.navlink.on,nav button.navlink:hover{background:#374151;color:#fff}
 main{flex:1;padding:24px;max-width:1200px}h1{margin:0 0 16px;font-size:22px}.card{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:16px}
 table{width:100%;border-collapse:collapse;background:#fff}th,td{border:1px solid #e2e8f0;padding:8px;text-align:left;font-size:13px}th{background:#f1f5f9}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.row{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
@@ -449,12 +542,20 @@ label{display:block;margin:8px 0}input[name=user],input[name=password],input[nam
 
 
 def run(cfg: PanelConfig):
+    import os as _os
     auth = AuthStore(cfg.password_file, cfg.auth_log, cfg.session_ttl_min * 60)
     Handler.cfg = cfg
     Handler.auth = auth
+    if not (_os.path.isfile(cfg.cert) and _os.path.isfile(cfg.key)):
+        raise SystemExit(
+            f"TLS cert/key not found: cert={cfg.cert} key={cfg.key} "
+            "(postinst normally creates them; check /etc/awg-panel/config.ini)")
     srv = ThreadingHTTPServer((cfg.host, cfg.port), Handler)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ctx.load_cert_chain(cfg.cert, cfg.key)
+    try:
+        ctx.load_cert_chain(cfg.cert, cfg.key)
+    except (OSError, ssl.SSLError) as ex:
+        raise SystemExit(f"TLS load failed ({cfg.cert}, {cfg.key}): {ex}")
     srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
     print(f"awg-panel https://{cfg.host}:{cfg.port} (manage={cfg.manage_script})")
     srv.serve_forever()

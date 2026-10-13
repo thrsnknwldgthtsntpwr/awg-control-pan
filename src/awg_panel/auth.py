@@ -24,7 +24,7 @@ class AuthStore:
     auth_log: str
     ttl_sec: int = 1800
     sessions: dict = field(default_factory=dict)
-    fails: dict = field(default_factory=dict)  # ip -> [count, until_ts]
+    fails: dict = field(default_factory=dict)  # ip -> (count, blocked_until_ts, last_fail_ts)
 
     # -- password file: "salt_hex:iterations:hash_hex" (pbkdf2-sha256) --
     def verify(self, password: str) -> bool:
@@ -69,18 +69,35 @@ class AuthStore:
         for k in [k for k, v in self.sessions.items() if v.expires < now]:
             self.sessions.pop(k, None)
 
+    def _gc_fails(self) -> None:
+        now = time.time()
+        for k, v in list(self.fails.items()):
+            _c, until, last = v if len(v) == 3 else (v[0], v[1], 0.0)
+            if until <= now and (now - last) > 600:
+                self.fails.pop(k, None)
+        if len(self.fails) > 10000:
+            self.fails.clear()
+
     # -- login rate limit: 5 fails -> block ip 5 min --
     def blocked(self, ip: str) -> bool:
+        self._gc_fails()
         c = self.fails.get(ip)
-        return bool(c and c[1] > time.time())
+        if not c:
+            return False
+        until = c[1] if len(c) >= 2 else 0.0
+        return bool(until > time.time())
 
     def note_fail(self, ip: str) -> None:
-        c, until = self.fails.get(ip, (0, 0.0))
+        self._gc_fails()
+        now = time.time()
+        cur = self.fails.get(ip, (0, 0.0, 0.0))
+        c = cur[0] if len(cur) >= 1 else 0
+        until = cur[1] if len(cur) >= 2 else 0.0
         c += 1
         if c >= 5:
-            until = time.time() + 300
+            until = now + 300
             c = 0
-        self.fails[ip] = (c, until)
+        self.fails[ip] = (c, until, now)
 
     def note_ok(self, ip: str) -> None:
         self.fails.pop(ip, None)

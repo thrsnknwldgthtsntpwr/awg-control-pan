@@ -1,9 +1,19 @@
 # Least-privilege for awgpanel user (variant 1b). Managed by .deb.
 # Panel may only: run manage subcommands used by UI + read live files via helper.
+Defaults:awgpanel !requiretty, env_reset
 awgpanel ALL=(root) NOPASSWD: /bin/bash /root/awg/manage_amneziawg.sh --json --no-color list
 awgpanel ALL=(root) NOPASSWD: /bin/bash /root/awg/manage_amneziawg.sh --json --no-color stats
 awgpanel ALL=(root) NOPASSWD: /bin/bash /root/awg/manage_amneziawg.sh --json --no-color check
+# NOTE: --expires flag sits between --yes and add (manage argparse order),
+# so both bare and --expires variants must be allowed, else add-with-days fails.
 awgpanel ALL=(root) NOPASSWD: /bin/bash /root/awg/manage_amneziawg.sh --json --no-color --yes add *
+awgpanel ALL=(root) NOPASSWD: /bin/bash /root/awg/manage_amneziawg.sh --json --no-color --yes --expires=* add *
 awgpanel ALL=(root) NOPASSWD: /bin/bash /root/awg/manage_amneziawg.sh --json --no-color --yes remove *
 awgpanel ALL=(root) NOPASSWD: /bin/bash /root/awg/manage_amneziawg.sh --json --no-color --yes regen *
-awgpanel ALL=(root) NOPASSWD: /usr/sbin/awg-panel-helper *
+# Helper enumerated explicitly (no blanket `helper *`): each arg shape pinned,
+# helper itself re-validates names and never emits server PrivateKey.
+awgpanel ALL=(root) NOPASSWD: /usr/sbin/awg-panel-helper client-conf *
+awgpanel ALL=(root) NOPASSWD: /usr/sbin/awg-panel-helper client-uri *
+awgpanel ALL=(root) NOPASSWD: /usr/sbin/awg-panel-helper client-qr *
+awgpanel ALL=(root) NOPASSWD: /usr/sbin/awg-panel-helper server-pubkeys
+awgpanel ALL=(root) NOPASSWD: /usr/sbin/awg-panel-helper init-info

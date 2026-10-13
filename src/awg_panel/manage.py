@@ -28,12 +28,27 @@ def _is_root() -> bool:
         return False
 
 
-def _base(manage_script: str, helper_mode: bool = True) -> list[str]:
+def _base(manage_script: str) -> list[str]:
     # When running as awgpanel user, sudo rules (see packaging/sudoers)
     # allow exactly these binaries. As root (dev/UTC) call directly.
     if _is_root():
         return ["/bin/bash", manage_script]
     return ["/usr/bin/sudo", "-n", "/bin/bash", manage_script]
+
+
+def _parse_json_output(stdout: str, rc: int, stderr: str) -> ManageResult:
+    """Single JSON-parsing rule: stdout is exactly ONE json document (last line)."""
+    out = (stdout or "").strip()
+    data = None
+    if out:
+        try:
+            data = json.loads(out.splitlines()[-1])
+        except json.JSONDecodeError:
+            return ManageResult(False, rc, None, (stderr or "")[-2000:] + " | bad json stdout")
+    ok = rc == 0
+    if isinstance(data, dict) and "ok" in data:
+        ok = bool(data["ok"]) and rc == 0
+    return ManageResult(ok, rc, data, (stderr or "")[-4000:])
 
 
 def run_manage(manage_script: str, *args: str, timeout: int = 60) -> ManageResult:
@@ -44,18 +59,7 @@ def run_manage(manage_script: str, *args: str, timeout: int = 60) -> ManageResul
         return ManageResult(False, 124, None, "timeout manage")
     except OSError as e:
         return ManageResult(False, 127, None, str(e))
-    out = (p.stdout or "").strip()
-    data = None
-    if out:
-        try:
-            # Contract: stdout is exactly ONE json document.
-            data = json.loads(out.splitlines()[-1])
-        except json.JSONDecodeError:
-            return ManageResult(False, p.returncode, None, (p.stderr or "")[-2000:] + " | bad json stdout")
-    ok = p.returncode == 0
-    if isinstance(data, dict) and "ok" in data:
-        ok = bool(data["ok"]) and p.returncode == 0
-    return ManageResult(ok, p.returncode, data, (p.stderr or "")[-4000:])
+    return _parse_json_output(p.stdout, p.returncode, p.stderr)
 
 
 def cmd_list(manage_script: str) -> ManageResult:
@@ -113,15 +117,7 @@ def cmd_regen(manage_script: str, names: list[str]) -> ManageResult:
 
 
 def _parse(p: "subprocess.CompletedProcess[str]") -> ManageResult:
-    out = (p.stdout or "").strip()
-    data = None
-    if out:
-        try:
-            data = json.loads(out.splitlines()[-1])
-        except json.JSONDecodeError:
-            return ManageResult(False, p.returncode, None, (p.stderr or "")[-2000:])
-    ok = p.returncode == 0 and (not isinstance(data, dict) or data.get("ok", True))
-    return ManageResult(ok, p.returncode, data, (p.stderr or "")[-4000:])
+    return _parse_json_output(p.stdout, p.returncode, p.stderr)
 
 
 def run_helper(helper: str, *args: str, timeout: int = 15) -> tuple[int, bytes, str]:

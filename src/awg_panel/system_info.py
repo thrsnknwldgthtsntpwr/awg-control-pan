@@ -16,12 +16,15 @@ def _read(path: str) -> str:
 def mem_info() -> dict:
     out = {"total_kb": 0, "avail_kb": 0, "free_kb": 0}
     for line in _read("/proc/meminfo").splitlines():
-        if line.startswith("MemTotal:"):
-            out["total_kb"] = int(line.split()[1])
-        elif line.startswith("MemAvailable:"):
-            out["avail_kb"] = int(line.split()[1])
-        elif line.startswith("MemFree:"):
-            out["free_kb"] = int(line.split()[1])
+        try:
+            if line.startswith("MemTotal:"):
+                out["total_kb"] = int(line.split()[1])
+            elif line.startswith("MemAvailable:"):
+                out["avail_kb"] = int(line.split()[1])
+            elif line.startswith("MemFree:"):
+                out["free_kb"] = int(line.split()[1])
+        except (IndexError, ValueError):
+            continue
     total = out["total_kb"] or 1
     avail = out["avail_kb"] or out["free_kb"]
     out["used_kb"] = max(0, total - avail)
