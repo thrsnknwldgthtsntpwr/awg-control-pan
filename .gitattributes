@@ -13,3 +13,4 @@ packaging/config.ini.example text eol=lf
 *.yml text eol=lf
 .gitattributes text eol=lf
 .gitignore text eol=lf
+LICENSE text eol=lf
