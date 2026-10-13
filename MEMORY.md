@@ -33,3 +33,4 @@
 - 2026-10-13: Инициализация памяти. Проверка доступов: `read` OK, `write` OK (` .access_test.tmp` создан и удалён), `icacls` — полные права. Каталог пуст.
 - 2026-10-13: MVP awg-panel: src/awg_panel/{server,manage,system_info,auth,config,validate}, bin/{helper,set-password}, packaging/{DEBIAN,service,sudoers}, build_deb.sh, workflow, README. Проверки: py_compile OK, unittest 6/6 OK, smoke рендера OK (layout/server/table), bash -n helper/postinst/build OK. disk_usage починен для Windows-dev (statvfs guard).
 - 2026-10-13: По фидбэку: host по дефолту 0.0.0.0:8443 (без изменений), массовый regen убран из списка клиентов (только в карточке), журнал = файл + последние 10 на Статусе. Перепроверено: py_compile + unittest 6/6 OK.
+- 2026-10-13: Локальный git: init, коммит MVP (674ddbb), коммит чистки pycache+.gitignore (6bdf404). Дерево чистое.
