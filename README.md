@@ -37,14 +37,47 @@
 ## Установка поверх живого сервера
 
 ```
-sudo dpkg -i awg-panel_0.1.1_all.deb
+# Рекомендуется dpkg (без _apt-предупреждения, см. ниже):
+sudo dpkg -i awg-panel_*_all.deb
 # postinst НЕ трогает /root/awg и /etc/amnezia — только свои файлы.
-# Пароль покажет apt-вывод + /root/.awg-panel-initial-password (600).
-# Открыть: https://<server>:8443/  (self-signed — подтвердить исключение)
-sudo awg-panel-set-password   # смена
 ```
 
-Порт: править `/etc/awg-panel/config.ini` → `systemctl restart awg-panel`.
+Что дальше (то же самое печатает postinst в конце установки):
+
+1. Пароль: `sudo cat /root/.awg-panel-initial-password` (только первая
+   установка). Сменить: `sudo awg-panel-set-password`.
+2. Настройки: `/etc/awg-panel/config.ini` (`host`/`port`, дефолт `0.0.0.0:8443`),
+   после правок — `sudo systemctl restart awg-panel`.
+3. Открыть: `https://<IP-сервера>:8443/` (self-signed — подтвердить исключение).
+   Проверка: `sudo systemctl status awg-panel --no-pager`,
+   `sudo journalctl -u awg-panel -n 30 --no-pager`.
+
+Про предупреждение apt при установке локального .deb:
+
+```
+N: Загрузка выполняется от лица суперпользователя без ограничений песочницы,
+так как файл «.../awg-panel_*_all.deb» недоступен для пользователя «_apt».
+```
+
+Это безвредно: файл лежит в `$HOME`, куда у `_apt` нет доступа, и apt
+дочитывает его как root. Чтобы не видеть его — ставить через
+`sudo dpkg -i` (выше) либо скопировать .deb в доступное место:
+`cp awg-panel_*_all.deb /tmp/ && sudo apt install /tmp/awg-panel_*_all.deb`.
+
+Восстановление sudo после 0.1.1: выпуск 0.1.1 привёз
+`/etc/sudoers.d/awg-panel` с владельцем uid 1001, такой файл ломает ВЕСЬ
+sudo (`... is owned by uid 1001, should be 0`). Починить как root
+(через консоль/`su -`/`pkexec`, т.к. сам sudo не работает):
+
+```
+su -
+chown root:root /etc/sudoers.d/awg-panel
+chmod 440 /etc/sudoers.d/awg-panel
+visudo -c
+```
+
+После этого поставить 0.1.2+: там сборка идёт с `--root-owner-group`,
+а postinst при каждом upgrade/reinstall сам чинит владельца/права.
 
 ## Безопасность (честно)
 

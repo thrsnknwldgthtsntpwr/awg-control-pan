@@ -140,5 +140,36 @@ class TestSystemInfo(unittest.TestCase):
             system_info._read = orig
 
 
+class TestPackaging(unittest.TestCase):
+    def test_deb_files_root_owned(self):
+        # Regression: 0.1.1 built as uid 1001 shipped sudoers owned by 1001,
+        # which breaks ALL sudo on target ("should be 0").
+        build = (Path(__file__).resolve().parents[1] / "build_deb.sh").read_text()
+        self.assertIn("root-owner-group", build)
+        self.assertIn("chown -R 0:0", build)
+
+    def test_postinst_heals_sudoers_owner(self):
+        postinst = (Path(__file__).resolve().parents[1] / "packaging" / "DEBIAN" / "postinst").read_text()
+        self.assertIn("chown root:root /etc/sudoers.d/awg-panel", postinst)
+        # chown must run before the visudo check, otherwise a broken
+        # owner still fails validation on upgrade.
+        self.assertLess(
+            postinst.index("chown root:root /etc/sudoers.d/awg-panel"),
+            postinst.index("visudo -c"),
+        )
+        self.assertIn("chmod 440 /etc/sudoers.d/awg-panel", postinst)
+
+    def test_postinst_prints_next_steps(self):
+        postinst = (Path(__file__).resolve().parents[1] / "packaging" / "DEBIAN" / "postinst").read_text()
+        for marker in (
+            "/etc/awg-panel/config.ini",
+            "systemctl restart awg-panel",
+            "awg-panel-set-password",
+            "https://<IP",
+            "/root/.awg-panel-initial-password",
+        ):
+            self.assertIn(marker, postinst)
+
+
 if __name__ == "__main__":
     unittest.main()

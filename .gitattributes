@@ -1,0 +1,15 @@
+# Shell-скрипты и файлы пакета ДОЛЖНЫ оставаться с LF:
+# CRLF ломает #!/bin/bash (postinst/helper/build) на целевом сервере.
+*.sh text eol=lf
+bin/* text eol=lf
+packaging/DEBIAN/postinst text eol=lf
+packaging/DEBIAN/prerm text eol=lf
+packaging/DEBIAN/postrm text eol=lf
+packaging/sudoers text eol=lf
+packaging/awg-panel.service text eol=lf
+packaging/config.ini.example text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+.gitattributes text eol=lf
+.gitignore text eol=lf

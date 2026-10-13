@@ -39,16 +39,35 @@ case "$1" in
       unset PW
       echo "Saved to /root/.awg-panel-initial-password (change via: sudo awg-panel-set-password)" >&2
     fi
+    # sudoers ownership+perms self-heal: .deb 0.1.1, собранный не под root,
+    # привёз /etc/sudoers.d/awg-panel с владельцем uid 1001 — такой файл
+    # ломает ВЕСЬ sudo ("is owned by uid 1001, should be 0").
+    # postinst чинит это при каждом upgrade/reinstall/reconfigure.
+    chown root:root /etc/sudoers.d/awg-panel || true
+    chmod 440 /etc/sudoers.d/awg-panel || true
     # sudoers validate
     if command -v visudo >/dev/null 2>&1; then
       visudo -c -f /etc/sudoers.d/awg-panel || echo "WARN: sudoers check failed" >&2
     fi
-    chmod 440 /etc/sudoers.d/awg-panel || true
     chmod 755 /usr/sbin/awg-panel-helper
     systemctl daemon-reload || true
     systemctl enable awg-panel.service || true
     systemctl restart awg-panel.service || echo "WARN: start failed, see journalctl -u awg-panel" >&2
-    echo "OK: existing VPN users untouched. Open https://<server>:8443/" >&2
+    # ---- что делать дальше (показывается после каждой установки) ----
+    PORT="8443"
+    if [ -f /etc/awg-panel/config.ini ]; then
+      P="$(awk -F= '/^[[:space:]]*port[[:space:]]*=/ {gsub(/[[:space:]]/,"",$2); print $2; exit}' /etc/awg-panel/config.ini 2>/dev/null || true)"
+      if [ -n "$P" ]; then PORT="$P"; fi
+    fi
+    cat >&2 <<EOF
+awg-panel установлен. Существующие VPN-пользователи не тронуты.
+  1. Пароль админа: cat /root/.awg-panel-initial-password (только первая установка).
+     Сменить: sudo awg-panel-set-password
+  2. Настройки: /etc/awg-panel/config.ini (host/port), после правок:
+     sudo systemctl restart awg-panel
+  3. Открыть: https://<IP-сервера>:$PORT/ (сертификат self-signed — подтвердить исключение).
+     Проверка: sudo systemctl status awg-panel --no-pager; sudo journalctl -u awg-panel -n 30 --no-pager
+EOF
     ;;
 esac
 exit 0

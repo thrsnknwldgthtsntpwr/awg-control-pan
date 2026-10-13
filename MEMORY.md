@@ -23,7 +23,8 @@
 - [x] Локальный git: init + первый коммит (2026-10-13)
 - [x] Ревью проведено (2026-10-13): найдены критичные баги service (NoNewPrivileges/ProtectHome) и sudoers (--expires), плюс 10+ средних
 - [x] Правки ревью внесены (2026-10-13): service/sudoers/helper/postinst/server/auth/config/manage/system_info/build, tests 12/12 OK
-- [ ] e2e на VPS с живым manage (list/add/remove/check/stats/regen, QR/conf/vpnuri, sudoers, postinst, service)
+- [x] e2e на VPS частично: установка 0.1.1 показала 2 проблемы — (1) нет инструкции что дальше, (2a) безвредное _apt-предупреждение про песочницу, (2b) КРИТ: sudoers с владельцем uid 1001 ломает весь sudo
+- [ ] выпустить 0.1.2 (.deb пересобрать с фиксом, e2e-повтор на VPS)
 
 ## Решения
 - 2026-10-13: Память ведётся в этом файле (`MEMORY.md`) в корне каталога для работы в нескольких сессиях.
@@ -40,3 +41,4 @@
 - 2026-10-13: Сборка 0.1.1: bump __init__.py/README до 0.1.1 (955e7a7), +x на скриптах для CI (425b837), portable sudoers для sudo-rs — `--yes *` одной строкой, без requiretty (d8406ee). Чистая сборка в WSL: .deb OK (17572 байт, sha256 1227ed54…), visudo parsed OK, unittest 12/12 OK. Локальный .deb — в dist/ (gitignored).
 - 2026-10-13: Push в GitHub: master 460ca10..9fa34f8 (6 коммитов) + тег v0.1.1 → запущен workflow build-deb.yml (CI соберёт .deb и приложит к Release). PAT использован разово, helper отключён, история очищена.
 - 2026-10-13: CI-фикс 403: workflow build-deb.yml получил `permissions: contents: write` (a04d570) — без этого softprops/action-gh-release падает «Resource not accessible by integration». Тег v0.1.1 переставлен на a04d570 (релиза ещё не было) и запушен заново для перезапуска сборки.
+- 2026-10-13: Фикс замечаний с VPS (0.1.2): (1) postinst теперь печатает RU-инструкцию «что дальше» — пароль /root/.awg-panel-initial-password, смена через awg-panel-set-password, конфиг /etc/awg-panel/config.ini + restart, URL https://IP:PORT/ с реальным портом из конфига, status/journalctl (packaging/DEBIAN/postinst); то же в README. (2a) _apt-предупреждение про песочницу — безвредно (файл в $HOME недоступен _apt), в README рекомендованы `dpkg -i` / копия в /tmp. (2b) КРИТ: .deb 0.1.1 собран не под root и привёз sudoers с uid 1001 → ломает ВЕСЬ sudo: build_deb.sh теперь `chown -R 0:0` + `dpkg-deb --root-owner-group --build` (fallback на plain), postinst сам чинит `chown root:root`+440 перед visudo при каждом upgrade/reinstall. Версия 0.1.2 (src/__init__.py). Регресс-тесты TestPackaging 3 шт (всего 15/15 OK), bash -n postinst/build OK. Файлы: build_deb.sh, packaging/DEBIAN/postinst, README.md, src/__init__.py, tests/test_panel.py.

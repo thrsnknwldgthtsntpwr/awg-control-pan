@@ -39,5 +39,15 @@ cp "$ROOT/packaging/config.ini.example" "$STAGE/usr/share/awg-panel/config.ini.e
 # postinst still keeps existing user edits (conffile semantics).
 cp "$ROOT/packaging/config.ini.example" "$STAGE/etc/awg-panel/config.ini"
 
-dpkg-deb --build "$STAGE"
+# All files in .deb must be root-owned: dpkg-deb preserves staging uid/gid,
+# and a sudoers file owned by uid 1001 breaks ALL sudo on target
+# ("sudo: /etc/sudoers.d/awg-panel is owned by uid 1001, should be 0").
+# chown covers root builds; --root-owner-group covers non-root builds (WSL/CI).
+chown -R 0:0 "$STAGE" 2>/dev/null || true
+
+if dpkg-deb --help 2>/dev/null | grep -q root-owner-group; then
+  dpkg-deb --root-owner-group --build "$STAGE"
+else
+  dpkg-deb --build "$STAGE"
+fi
 echo "Built: $STAGE.deb"
