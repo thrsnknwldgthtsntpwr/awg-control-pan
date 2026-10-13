@@ -17,15 +17,17 @@ case "$1" in
     fi
     chmod 640 /etc/awg-panel/config.ini
     chown root:awgpanel /etc/awg-panel/config.ini || true
-    # self-signed cert (do not overwrite)
+    # self-signed cert (do not overwrite existing cert/key, but always
+    # heal owner/perms: key must be group-readable by awgpanel service user.
+    # 600 here = TLS load failed Permission denied + restart-loop (0.1.2).
     if [ ! -f /etc/awg-panel/cert.pem ] || [ ! -f /etc/awg-panel/key.pem ]; then
       openssl req -x509 -newkey rsa:2048 -days 825 -nodes \
         -subj "/CN=awg-panel" \
         -keyout /etc/awg-panel/key.pem -out /etc/awg-panel/cert.pem
-      chmod 600 /etc/awg-panel/key.pem
-      chmod 644 /etc/awg-panel/cert.pem
-      chown root:awgpanel /etc/awg-panel/key.pem /etc/awg-panel/cert.pem || true
     fi
+    chown root:awgpanel /etc/awg-panel/key.pem /etc/awg-panel/cert.pem || true
+    chmod 640 /etc/awg-panel/key.pem || true
+    chmod 644 /etc/awg-panel/cert.pem || true
     # admin password (do not overwrite existing)
     if [ ! -f /etc/awg-panel/password ]; then
       PW="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16)"

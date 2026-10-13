@@ -159,6 +159,15 @@ class TestPackaging(unittest.TestCase):
         )
         self.assertIn("chmod 440 /etc/sudoers.d/awg-panel", postinst)
 
+    def test_postinst_tls_key_group_readable(self):
+        # Regression 0.1.2: key.pem was 600 root:awgpanel -> service as
+        # User=awgpanel got TLS load Permission denied + restart-loop.
+        # Key must be 640 root:awgpanel, healed on every upgrade (not only create).
+        postinst = (Path(__file__).resolve().parents[1] / "packaging" / "DEBIAN" / "postinst").read_text()
+        self.assertIn("chmod 640 /etc/awg-panel/key.pem", postinst)
+        self.assertNotIn("chmod 600 /etc/awg-panel/key.pem", postinst)
+        self.assertIn("chown root:awgpanel /etc/awg-panel/key.pem", postinst)
+
     def test_postinst_prints_next_steps(self):
         postinst = (Path(__file__).resolve().parents[1] / "packaging" / "DEBIAN" / "postinst").read_text()
         for marker in (
