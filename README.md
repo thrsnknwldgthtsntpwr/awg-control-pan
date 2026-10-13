@@ -15,13 +15,16 @@
   Regen («Пересоздать файлы») — только внутри карточки клиента.
   Имя — ссылка в карточку: конфиг, `vpn://`, QR, трафик, handshake, срок.
 - Срок при добавлении — только днями (пусто = бессрочно), удаление истекших — крон инсталлера.
-- Auth: один `admin`, хеш PBKDF2 в `/etc/awg-panel/password` (не системный юзер),
+- Auth: логин/пароль из `/etc/awg-panel/config.ini`
+  (`webusername`/`webpassword`, дефолт `admin`/`admin`),
   сессии в памяти, журнал в `/var/log/awg-panel/auth.log`. TOTP/2FA/API — нет.
 - Стек: Python3 stdlib (`http.server`, встроенный HTTPS), SSR + HTMX через CDN
   (формы работают и без JS). Стороннего веб-сервера нет.
-- Привилегии: сервис — пользователь `awgpanel` + точечный sudoers
-  (только нужные `manage` + `/usr/sbin/awg-panel-helper`). UFW/iptables не трогаем.
-- Порт/хост — в `/etc/awg-panel/config.ini` (`host`/`port`, дефолт `0.0.0.0:8443`).
+- Привилегии: сервис работает от `root` и вызывает `manage`/`helper` напрямую
+  без sudo (manage сам требует root: wg/iptables/конфиги). UFW/iptables не трогаем.
+  Файл `/etc/sudoers.d/awg-panel` остался только как legacy для старых установок.
+- Порт/хост/логин/пароль — в `/etc/awg-panel/config.ini`
+  (`host`/`port`/`webusername`/`webpassword`, дефолт `0.0.0.0:8443` + `admin`/`admin`).
 
 ## Файлы проекта
 
@@ -29,7 +32,8 @@
   `system_info.py` (`/proc`), `auth.py`, `config.py`, `validate.py`
 - `bin/awg-panel-helper` — безопасные чтения live-файлов (валидация имён,
   серверный `PrivateKey` никогда не отдаётся)
-- `bin/awg-panel-set-password[-internal]` — смена пароля
+- `bin/awg-panel-set-password` — смена логина/пароля в config.ini
+  (старый `awg-panel-set-password-internal` и `/etc/awg-panel/password` удалены в 0.1.4)
 - `packaging/` — `DEBIAN/{control,conffiles,postinst,prerm,postrm}`,
   `awg-panel.service`, `sudoers`, `config.ini.example`
 - `build_deb.sh`, `.github/workflows/build-deb.yml` (сборка + релиз .deb на GitHub)
@@ -44,11 +48,11 @@ sudo dpkg -i awg-panel_*_all.deb
 
 Что дальше (то же самое печатает postinst в конце установки):
 
-1. Пароль: `sudo cat /root/.awg-panel-initial-password` (только первая
-   установка). Сменить: `sudo awg-panel-set-password`.
-2. Настройки: `/etc/awg-panel/config.ini` (`host`/`port`, дефолт `0.0.0.0:8443`),
-   после правок — `sudo systemctl restart awg-panel`.
-3. Открыть: `https://<IP-сервера>:8443/` (self-signed — подтвердить исключение).
+1. Логин/пароль: `/etc/awg-panel/config.ini` (`webusername`/`webpassword`,
+   дефолт `admin`/`admin`). Сменить: `sudo awg-panel-set-password`
+   (или правка config.ini вручную), после правок —
+   `sudo systemctl restart awg-panel`.
+2. Открыть: `https://<IP-сервера>:8443/` (self-signed — подтвердить исключение).
    Проверка: `sudo systemctl status awg-panel --no-pager`,
    `sudo journalctl -u awg-panel -n 30 --no-pager`.
 

@@ -178,11 +178,12 @@ class Handler(BaseHTTPRequestHandler):
         msg = f'<p class=err>{e(err)}</p>' if err else ""
         return self._layout("Вход", "", f"<div class=card style='max-width:420px'><h1>Вход</h1>{msg}"
                            "<form method=post action=/login>"
-                           "<label>Логин<input name=user value=admin readonly></label>"
+                           "<label>Логин<input name=user value=admin></label>"
                            "<label>Пароль<input type=password name=password autofocus></label>"
                            "<button>Войти</button></form>"
-                           "<p class=muted>Отдельный от системных пользователей. Сброс: "
-                           "<code>sudo awg-panel-set-password</code>.</p></div>")
+                           "<p class=muted>Логин/пароль из /etc/awg-panel/config.ini "
+                           "(webusername/webpassword). После правок: "
+                           "<code>sudo systemctl restart awg-panel</code>.</p></div>")
 
     def _page_status(self, tab: str) -> str:
         s = self._sess()
@@ -306,7 +307,6 @@ class Handler(BaseHTTPRequestHandler):
         stats_map = {}
         if rs.ok and isinstance(rs.data, list):
             stats_map = {x.get("name"): x for x in rs.data}
-        _rc, pk_raw, _e = run_helper(self.cfg.helper, "server-pubkeys")
         pubkeys = {}
         cur = ""
         for line in pk_raw.decode("utf-8", "replace").splitlines():
@@ -431,7 +431,7 @@ class Handler(BaseHTTPRequestHandler):
         ip = self._client_ip()
         if u.path == "/login":
             if self.auth.blocked(ip):
-                self.auth.journal(ip, "admin", False, "rate-limited")
+                self.auth.journal(ip, "-", False, "rate-limited")
                 return self._send(429, self._page_login("Слишком много попыток, подождите 5 мин"))
             try:
                 form = self._parse_form()
@@ -440,14 +440,18 @@ class Handler(BaseHTTPRequestHandler):
             pw = form.get("password", "")
             if isinstance(pw, list):
                 pw = pw[0] if pw else ""
-            if self.auth.verify(pw):
+            user = form.get("user", "")
+            if isinstance(user, list):
+                user = user[0] if user else ""
+            user = (user or "").strip() or "admin"
+            if self.auth.verify(user, pw):
                 self.auth.note_ok(ip)
-                self.auth.journal(ip, "admin", True)
+                self.auth.journal(ip, user, True)
                 s = self.auth.create(ip)
                 return self._redirect("/status", self._set_session_cookie(s.sid))
             self.auth.note_fail(ip)
-            self.auth.journal(ip, "admin", False, "bad password")
-            return self._send(200, self._page_login("Неверный пароль"))
+            self.auth.journal(ip, user, False, "bad credentials")
+            return self._send(200, self._page_login("Неверный логин или пароль"))
         s = self._require_auth()
         if not s:
             return
@@ -543,7 +547,7 @@ label{display:block;margin:8px 0}input[name=user],input[name=password],input[nam
 
 def run(cfg: PanelConfig):
     import os as _os
-    auth = AuthStore(cfg.password_file, cfg.auth_log, cfg.session_ttl_min * 60)
+    auth = AuthStore(cfg.webusername, cfg.webpassword, cfg.auth_log, cfg.session_ttl_min * 60)
     Handler.cfg = cfg
     Handler.auth = auth
     if not (_os.path.isfile(cfg.cert) and _os.path.isfile(cfg.key)):

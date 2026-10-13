@@ -1,7 +1,6 @@
-"""Single-admin auth: PBKDF2 password file, in-memory sessions, login journal."""
+"""Single-admin auth: credentials from config.ini, sessions in memory, journal to file."""
 from __future__ import annotations
 
-import hashlib
 import hmac
 import os
 import secrets
@@ -20,29 +19,27 @@ class Session:
 
 @dataclass
 class AuthStore:
-    password_file: str
-    auth_log: str
+    """Credentials come from PanelConfig (webusername/webpassword).
+
+    Password is stored in clear in /etc/awg-panel/config.ini (mode 600,
+    root-only): this is the requested simplification — no separate
+    password file, no hashing. Comparison is constant-time.
+    """
+
+    username: str = "admin"
+    password: str = "admin"
+    auth_log: str = "/var/log/awg-panel/auth.log"
     ttl_sec: int = 1800
     sessions: dict = field(default_factory=dict)
     fails: dict = field(default_factory=dict)  # ip -> (count, blocked_until_ts, last_fail_ts)
 
-    # -- password file: "salt_hex:iterations:hash_hex" (pbkdf2-sha256) --
-    def verify(self, password: str) -> bool:
+    def verify(self, username: str, password: str) -> bool:
         try:
-            with open(self.password_file, encoding="utf-8") as f:
-                raw = f.read().strip()
-            salt_h, it_s, hash_h = raw.split(":")
-            it = int(it_s)
-            dk = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt_h), it)
-            return hmac.compare_digest(dk.hex(), hash_h)
+            u_ok = hmac.compare_digest(str(username or ""), str(self.username or ""))
+            p_ok = hmac.compare_digest(str(password or ""), str(self.password or ""))
+            return bool(u_ok and p_ok)
         except Exception:
             return False
-
-    @staticmethod
-    def hash_password(password: str, iterations: int = 200_000) -> str:
-        salt = os.urandom(16)
-        dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
-        return f"{salt.hex()}:{iterations}:{dk.hex()}"
 
     # -- sessions --
     def create(self, ip: str) -> Session:

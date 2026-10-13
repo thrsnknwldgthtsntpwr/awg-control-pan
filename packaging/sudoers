@@ -1,4 +1,6 @@
-# Least-privilege for awgpanel user (variant 1b). Managed by .deb.
+# LEGACY (0.1.4+): service runs as root and calls manage/helper directly,
+# sudo is no longer used. File kept for clean upgrades / fallback installs
+# still running as `awgpanel`. Managed by .deb.
 # Panel may only: run manage subcommands used by UI + read live files via helper.
 # NOTE: validated with `visudo -c` on both classic sudo and sudo-rs.
 Defaults:awgpanel env_reset

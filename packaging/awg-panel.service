@@ -5,23 +5,24 @@ Wants=awg-quick@awg0.service
 
 [Service]
 Type=simple
-User=awgpanel
-Group=awgpanel
+# NOTE 0.1.4: сервис работает от root и вызывает manage/helper НАПРЯМУЮ
+# без sudo. Попытка держать User=awgpanel + sudo ломала всё:
+#   "sudo: unable to change to root gid: Operation not permitted"
+#   "sudo: error initializing audit plugin sudoers_audit"
+# причина — песочница systemd: CapabilityBoundingSet= (пустой) режет
+# setuid/setgid для sudo, а ProtectSystem=strict + ReadOnlyPaths
+# (/root/awg, /etc/amnezia) делали manage read-only даже при живом sudo.
+# Отсюда в UI: "manage check failed (rc=1)" на Статусе/AWG и
+# "list failed rc=1" на Клиентах + "v?/поколение ?" (helper init-info
+# через sudo тоже падал). Поэтому никакого sudo и строгой песочницы:
+# только PrivateTmp. manage сам требует root (wg/iptables/конфиги).
+User=root
+Group=root
 ExecStart=/usr/bin/python3 -m awg_panel
 WorkingDirectory=/usr/share/awg-panel/src
-# NOTE: NoNewPrivileges must stay OFF: panel escalates via sudo
-# to manage_amneziawg.sh and awg-panel-helper. With =yes sudo fails
-# ("effective uid is not 0") and all manage calls break.
-NoNewPrivileges=no
 PrivateTmp=yes
-# NOTE: ProtectHome=yes hides /root (mount ns, applies to sudo children too),
-# which breaks manage_script/helper under /root/awg. read-only keeps it visible.
-ProtectHome=read-only
-ProtectSystem=strict
-ReadOnlyPaths=/root/awg /etc/amnezia /etc/awg-panel /usr /bin
-ReadWritePaths=/var/log/awg-panel
-AmbientCapabilities=
-CapabilityBoundingSet=
+ProtectHome=no
+ProtectSystem=no
 Restart=on-failure
 RestartSec=3
 UMask=027

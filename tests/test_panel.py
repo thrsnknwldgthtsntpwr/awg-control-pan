@@ -34,32 +34,29 @@ class TestValidate(unittest.TestCase):
 
 
 class TestAuth(unittest.TestCase):
-    def test_hash_verify(self):
-        import tempfile
-        h = AuthStore.hash_password("s3cret-password")
-        with tempfile.NamedTemporaryFile("w+", delete=False) as f:
-            f.write(h + "\n")
-            path = f.name
-        st = AuthStore(path, "/tmp/nonexistent-auth.log", 60)
-        self.assertTrue(st.verify("s3cret-password"))
-        self.assertFalse(st.verify("wrong"))
+    def test_verify_config_credentials(self):
+        st = AuthStore("admin", "s3cret-password", "/tmp/nonexistent-auth.log", 60)
+        self.assertTrue(st.verify("admin", "s3cret-password"))
+        self.assertFalse(st.verify("admin", "wrong"))
+        self.assertFalse(st.verify("other", "s3cret-password"))
+        self.assertFalse(st.verify("", ""))
 
     def test_sessions(self):
-        st = AuthStore("/nonexistent", "/tmp/nonexistent-auth.log", 60)
+        st = AuthStore("admin", "pw", "/tmp/nonexistent-auth.log", 60)
         s = st.create("1.2.3.4")
         self.assertIsNotNone(st.get(s.sid))
         st.destroy(s.sid)
         self.assertIsNone(st.get(s.sid))
 
     def test_rate_limit(self):
-        st = AuthStore("/nonexistent", "/tmp/nonexistent-auth.log", 60)
+        st = AuthStore("admin", "pw", "/tmp/nonexistent-auth.log", 60)
         for _ in range(5):
             st.note_fail("9.9.9.9")
         self.assertTrue(st.blocked("9.9.9.9"))
 
     def test_rate_limit_gc(self):
         import time
-        st = AuthStore("/nonexistent", "/tmp/nonexistent-auth.log", 60)
+        st = AuthStore("admin", "pw", "/tmp/nonexistent-auth.log", 60)
         st.fails["1.1.1.1"] = (2, 0.0, time.time() - 700)
         st._gc_fails()
         self.assertNotIn("1.1.1.1", st.fails)
@@ -81,6 +78,31 @@ class TestConfig(unittest.TestCase):
             path2 = f.name
         self.assertEqual(load_config(path2).session_ttl_min, 1440)
 
+    def test_web_credentials(self):
+        import tempfile
+        from awg_panel.config import load_config
+        # defaults when missing
+        with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
+            f.write("[server]\nport = 8443\n")
+            path = f.name
+        cfg = load_config(path)
+        self.assertEqual(cfg.webusername, "admin")
+        self.assertEqual(cfg.webpassword, "admin")
+        # custom values
+        with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
+            f.write("[server]\nwebusername = boss\nwebpassword = s3cret\n")
+            path2 = f.name
+        cfg2 = load_config(path2)
+        self.assertEqual(cfg2.webusername, "boss")
+        self.assertEqual(cfg2.webpassword, "s3cret")
+        # empty falls back to admin
+        with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
+            f.write("[server]\nwebusername = \nwebpassword = \n")
+            path3 = f.name
+        cfg3 = load_config(path3)
+        self.assertEqual(cfg3.webusername, "admin")
+        self.assertEqual(cfg3.webpassword, "admin")
+
 
 class TestManage(unittest.TestCase):
     def test_parse_ok_flag(self):
@@ -95,7 +117,7 @@ class TestManage(unittest.TestCase):
 
     def test_add_argv_order_matches_sudoers(self):
         # Regression: --expires must sit between --yes and add,
-        # and sudoers must allow that shape (see packaging/sudoers).
+        # and legacy sudoers must allow that shape (see packaging/sudoers).
         import subprocess
         from unittest import mock
         from awg_panel import manage
@@ -126,6 +148,32 @@ class TestManage(unittest.TestCase):
         self.assertNotIn("awg-panel-helper *", txt)
         for line in ("helper client-conf *", "helper server-pubkeys", "helper init-info"):
             self.assertIn(line, txt)
+
+    def test_root_runs_direct_without_sudo(self):
+        # 0.1.4: service runs as root -> manage/helper called directly.
+        # Sudo path is only a fallback for legacy non-root installs.
+        from unittest import mock
+        from awg_panel import manage
+        with mock.patch.object(manage, "_is_root", lambda: True):
+            self.assertEqual(
+                manage._base("/root/awg/manage_amneziawg.sh"),
+                ["/bin/bash", "/root/awg/manage_amneziawg.sh"],
+            )
+            rc_holder = {}
+
+            import subprocess
+
+            def fake_run(cmd, **kw):
+                rc_holder["cmd"] = cmd
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+            with mock.patch.object(manage.subprocess, "run", fake_run):
+                manage.run_helper("/usr/sbin/awg-panel-helper", "server-pubkeys")
+            self.assertEqual(
+                rc_holder["cmd"][:2],
+                ["/usr/sbin/awg-panel-helper", "server-pubkeys"],
+            )
+            self.assertNotIn("/usr/bin/sudo", rc_holder["cmd"])
 
 
 class TestSystemInfo(unittest.TestCase):
@@ -159,14 +207,14 @@ class TestPackaging(unittest.TestCase):
         )
         self.assertIn("chmod 440 /etc/sudoers.d/awg-panel", postinst)
 
-    def test_postinst_tls_key_group_readable(self):
-        # Regression 0.1.2: key.pem was 600 root:awgpanel -> service as
-        # User=awgpanel got TLS load Permission denied + restart-loop.
-        # Key must be 640 root:awgpanel, healed on every upgrade (not only create).
+    def test_postinst_tls_key_root_only(self):
+        # 0.1.4: service runs as root -> key 600 root:root.
+        # (0.1.2 was 600 root:awgpanel = restart-loop; 0.1.3 was 640
+        # root:awgpanel for the awgpanel user. Both obsolete now.)
         postinst = (Path(__file__).resolve().parents[1] / "packaging" / "DEBIAN" / "postinst").read_text()
-        self.assertIn("chmod 640 /etc/awg-panel/key.pem", postinst)
-        self.assertNotIn("chmod 600 /etc/awg-panel/key.pem", postinst)
-        self.assertIn("chown root:awgpanel /etc/awg-panel/key.pem", postinst)
+        self.assertIn("chmod 600 /etc/awg-panel/key.pem", postinst)
+        self.assertIn("chown root:root /etc/awg-panel/key.pem", postinst)
+        self.assertNotIn("chown root:awgpanel /etc/awg-panel/key.pem", postinst)
 
     def test_postinst_prints_next_steps(self):
         postinst = (Path(__file__).resolve().parents[1] / "packaging" / "DEBIAN" / "postinst").read_text()
@@ -175,9 +223,58 @@ class TestPackaging(unittest.TestCase):
             "systemctl restart awg-panel",
             "awg-panel-set-password",
             "https://<IP",
-            "/root/.awg-panel-initial-password",
+            "webusername",
+            "webpassword",
         ):
             self.assertIn(marker, postinst)
+        # legacy password-file flow is gone (only cleanup rm stays)
+        self.assertNotIn("/root/.awg-panel-initial-password", postinst)
+        self.assertNotIn("| /usr/sbin/awg-panel-set-password-internal", postinst)
+        self.assertIn("rm -f /usr/sbin/awg-panel-set-password-internal", postinst)
+
+    def test_postinst_migrates_web_credentials(self):
+        postinst = (Path(__file__).resolve().parents[1] / "packaging" / "DEBIAN" / "postinst").read_text()
+        self.assertIn("webusername = admin", postinst)
+        self.assertIn("webpassword = admin", postinst)
+        self.assertIn("chmod 600 /etc/awg-panel/config.ini", postinst)
+
+    def test_service_runs_as_root_without_sudo_breaking_sandbox(self):
+        # Regression 0.1.3: User=awgpanel + CapabilityBoundingSet=(empty) +
+        # ProtectSystem=strict + ReadOnlyPaths broke sudo:
+        # "unable to change to root gid: Operation not permitted",
+        # "error initializing audit plugin sudoers_audit" ->
+        # "manage check failed (rc=1)" / "list failed rc=1" in UI.
+        # 0.1.4 runs as root with no such sandbox.
+        svc = (Path(__file__).resolve().parents[1] / "packaging" / "awg-panel.service").read_text()
+        # Only real directives count — comments describe the old breakage.
+        directives = [l for l in svc.splitlines() if l.strip() and not l.strip().startswith("#")]
+        body = "\n".join(directives)
+        self.assertIn("User=root", body)
+        self.assertIn("Group=root", body)
+        self.assertNotIn("CapabilityBoundingSet", body)
+        self.assertNotIn("AmbientCapabilities", body)
+        self.assertNotIn("NoNewPrivileges", body)
+        self.assertNotIn("ReadOnlyPaths", body)
+        self.assertNotIn("ProtectSystem=strict", body)
+        self.assertNotIn("ProtectHome=read-only", body)
+
+    def test_config_example_has_web_credentials(self):
+        example = (Path(__file__).resolve().parents[1] / "packaging" / "config.ini.example").read_text()
+        self.assertIn("webusername = admin", example)
+        self.assertIn("webpassword = admin", example)
+        self.assertNotIn("password_file", example)
+
+    def test_control_no_sudo_dep(self):
+        control = (Path(__file__).resolve().parents[1] / "packaging" / "DEBIAN" / "control").read_text()
+        depends = next(l for l in control.splitlines() if l.startswith("Depends:"))
+        self.assertNotIn("sudo", depends.split(":", 1)[1].split(","))
+
+    def test_build_does_not_ship_internal_setter(self):
+        build = (Path(__file__).resolve().parents[1] / "build_deb.sh").read_text()
+        self.assertNotIn("awg-panel-set-password-internal", build)
+        self.assertFalse(
+            (Path(__file__).resolve().parents[1] / "bin" / "awg-panel-set-password-internal").exists()
+        )
 
 
 if __name__ == "__main__":

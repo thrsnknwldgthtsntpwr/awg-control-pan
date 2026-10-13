@@ -16,9 +16,10 @@ class PanelConfig:
     awg_dir: str = "/root/awg"
     server_conf: str = "/etc/amnezia/amneziawg/awg0.conf"
     helper: str = "/usr/sbin/awg-panel-helper"
-    password_file: str = "/etc/awg-panel/password"
     auth_log: str = "/var/log/awg-panel/auth.log"
     session_ttl_min: int = 30
+    webusername: str = "admin"
+    webpassword: str = "admin"
 
 
 def load_config(path: str = "/etc/awg-panel/config.ini") -> PanelConfig:
@@ -43,8 +44,9 @@ def load_config(path: str = "/etc/awg-panel/config.ini") -> PanelConfig:
     cfg.awg_dir = (s.get("awg_dir", cfg.awg_dir) or cfg.awg_dir).strip() or cfg.awg_dir
     cfg.server_conf = (s.get("server_conf", cfg.server_conf) or cfg.server_conf).strip() or cfg.server_conf
     cfg.helper = (s.get("helper", cfg.helper) or cfg.helper).strip() or cfg.helper
-    cfg.password_file = (s.get("password_file", cfg.password_file) or cfg.password_file).strip() or cfg.password_file
     cfg.auth_log = (s.get("auth_log", cfg.auth_log) or cfg.auth_log).strip() or cfg.auth_log
+    cfg.webusername = (s.get("webusername", cfg.webusername) or cfg.webusername).strip() or "admin"
+    cfg.webpassword = (s.get("webpassword", cfg.webpassword) or cfg.webpassword).strip() or "admin"
     try:
         cfg.session_ttl_min = int(s.get("session_ttl_min", cfg.session_ttl_min))
     except ValueError:

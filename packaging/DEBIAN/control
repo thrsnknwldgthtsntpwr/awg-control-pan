@@ -3,7 +3,7 @@ Version: 0.1.0
 Section: net
 Priority: optional
 Architecture: all
-Depends: python3, openssl, sudo, systemd
+Depends: python3, openssl, systemd
 Recommends: qrencode
 Maintainer: awg-panel <local>
 Description: Minimal router-like web UI over amneziawg-installer manage script

@@ -28,8 +28,7 @@ find "$STAGE/usr/share/awg-panel" -name '__pycache__' -type d -prune -exec rm -r
 find "$STAGE/usr/share/awg-panel" -name '*.py[co]' -delete 2>/dev/null || true
 cp "$ROOT/bin/awg-panel-helper" "$STAGE/usr/sbin/awg-panel-helper"
 cp "$ROOT/bin/awg-panel-set-password" "$STAGE/usr/sbin/awg-panel-set-password"
-cp "$ROOT/bin/awg-panel-set-password-internal" "$STAGE/usr/sbin/awg-panel-set-password-internal"
-chmod 755 "$STAGE/usr/sbin/awg-panel-helper" "$STAGE/usr/sbin/awg-panel-set-password" "$STAGE/usr/sbin/awg-panel-set-password-internal"
+chmod 755 "$STAGE/usr/sbin/awg-panel-helper" "$STAGE/usr/sbin/awg-panel-set-password"
 
 cp "$ROOT/packaging/awg-panel.service" "$STAGE/lib/systemd/system/"
 cp "$ROOT/packaging/sudoers" "$STAGE/etc/sudoers.d/awg-panel"
