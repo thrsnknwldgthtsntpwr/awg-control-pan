@@ -366,15 +366,18 @@ class Handler(BaseHTTPRequestHandler):
             f"<tr><th>Трафик RX/TX</th><td>{e(traf)}</td></tr>"
             f"<tr><th>Handshake</th><td>{e(hs_s)}</td></tr>"
             "</table>"
-            f"<form method=post action=/clients/regen class=row><input type=hidden name=csrf value='{e(csrf0)}'>"
+            "<div class=actions>"
+            f"<form method=post action=/clients/regen><input type=hidden name=csrf value='{e(csrf0)}'>"
             f"<input type=hidden name=sel value='{e(name)}'><button>Пересоздать</button></form>"
-            f"<p><a class=btn href='/download?name={urllib.parse.quote(name)}&type=conf'>Скачать .conf</a> "
-            f"<a class=btn target=_blank rel=noopener href='/client-qr?name={urllib.parse.quote(name)}'>QR.png</a></p></div>"
-            f"<div class=card><h2>Конфиг</h2><pre class=conf>{e(conf_txt)}</pre></div>"
-            + (f"<div class=card><h2>vpn://</h2><pre class=wrap>{e(uri_txt)}</pre></div>" if uri_txt else "")
+            f"<a class=btn href='/download?name={urllib.parse.quote(name)}&type=conf'>Скачать .conf</a> "
+            f"<a class=btn target=_blank rel=noopener href='/client-qr?name={urllib.parse.quote(name)}'>QR.png</a></div></div>"
+            f"<div class=card><h2>Конфиг</h2><pre class=conf id=conf-pre>{e(conf_txt)}</pre>"
+            "<div class=actions><button type=button data-src=conf-pre>Скопировать</button></div></div>"
+            + (f"<div class=card><h2>vpn://</h2><pre class=wrap id=vpn-pre>{e(uri_txt)}</pre>"
+               "<div class=actions><button type=button data-src=vpn-pre>Скопировать</button></div></div>" if uri_txt else "")
             + (f"<div class=card><h2>QR</h2><img src='/client-qr?name={urllib.parse.quote(name)}' alt=QR style='max-width:260px'></div>"
                if rc1 == 0 else "")
-            + "</div>", csrf0)
+            + "</div>" + COPY_JS, csrf0)
 
     # ---------- HTTP verbs ----------
     def do_GET(self):
@@ -528,6 +531,11 @@ def hmac_eq(a: str, b: str) -> bool:
     return _h.compare_digest(a, b)
 
 
+COPY_JS = """<script>
+document.querySelectorAll('button[data-src]').forEach(function(b){b.addEventListener('click',function(){var el=document.getElementById(b.getAttribute('data-src'));if(!el)return;var t=el.textContent;function done(){b.textContent='Скопировано';setTimeout(function(){b.textContent='Скопировать'},1500)}function fb(){var r=document.createRange();r.selectNodeContents(el);var s=getSelection();s.removeAllRanges();s.addRange(r);try{document.execCommand('copy');done()}catch(e){}s.removeAllRanges()}if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(done,function(){fb()})}else{fb()}})});
+</script>"""
+
+
 STYLE_CSS = """*{box-sizing:border-box}body{margin:0;font:14px/1.45 system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#eef1f5;color:#1f2937;display:flex;min-height:100vh;overflow-x:hidden}
 aside{width:220px;background:#1f2937;color:#cbd5e1;display:flex;flex-direction:column;padding:18px 0;flex-shrink:0}
 .brand{color:#fff;font-weight:700;font-size:18px;padding:0 20px 16px}.brand small{display:block;color:#94a3b8;font-weight:400;font-size:11px}
@@ -535,7 +543,7 @@ nav a{display:block;color:#cbd5e1;text-decoration:none;padding:10px 20px}nav a.o
 nav form.navlogout{margin:0;padding:0}nav button.navlink{display:block;width:100%;text-align:left;background:none;border:0;color:#cbd5e1;padding:10px 20px;font:inherit;cursor:pointer;border-radius:0}nav button.navlink.on,nav button.navlink:hover{background:#374151;color:#fff}
 main{flex:1;padding:24px;max-width:1200px;min-width:0;overflow-x:hidden}h1{margin:0 0 16px;font-size:22px}.card{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:16px;min-width:0;max-width:100%}
 table{width:100%;border-collapse:collapse;background:#fff}th,td{border:1px solid #e2e8f0;padding:8px;text-align:left;font-size:13px}th{background:#f1f5f9}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.grid>*{min-width:0}.stack{display:flex;flex-direction:column;gap:16px}.stack>.card{margin-bottom:0}.row{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.grid>*{min-width:0}.stack{display:flex;flex-direction:column;gap:16px}.stack>.card{margin-bottom:0}.row{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}.actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center}.actions form{margin:0}
 input{padding:8px;border:1px solid #cbd5e1;border-radius:6px}button,.btn{background:#e2e8f0;border:1px solid #cbd5e1;border-radius:6px;padding:8px 14px;cursor:pointer;text-decoration:none;color:#111;display:inline-block}
 button:hover,.btn:hover{background:#cbd5e1}.tabs{margin-bottom:12px}.tabs a{padding:6px 14px;border:1px solid #cbd5e1;text-decoration:none;color:#111;background:#fff}.tabs a.on{background:#1f2937;color:#fff}
 .err{color:#b91c1c}.ok{color:#15803d}.warn{color:#b45309}.muted{color:#64748b;font-size:12px}.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}

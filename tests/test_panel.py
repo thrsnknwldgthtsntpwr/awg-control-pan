@@ -331,6 +331,30 @@ class TestClientPage(unittest.TestCase):
         # each block is its own card
         self.assertEqual(body.count("<div class=card>"), 4)
 
+    def test_peer_actions_single_row(self):
+        body = self._render_client()
+        peer = body[body.index("<h2>Пир</h2>"):body.index("<h2>Конфиг</h2>")]
+        self.assertIn("<div class=actions>", peer)
+        act = peer[peer.index("<div class=actions>"):]
+        self.assertLess(act.index(">Пересоздать<"), act.index("Скачать .conf"))
+        self.assertLess(act.index("Скачать .conf"), act.index("QR.png"))
+        from awg_panel.server import STYLE_CSS
+        self.assertIn(".actions{display:flex", STYLE_CSS)
+        self.assertIn("margin-top:12px", STYLE_CSS)
+        self.assertIn(".actions form{margin:0}", STYLE_CSS)
+
+    def test_copy_buttons_conf_and_vpn(self):
+        body = self._render_client()
+        i_conf_pre = body.index('id=conf-pre')
+        i_vpn_pre = body.index('id=vpn-pre')
+        self.assertLess(body.index("<h2>Конфиг</h2>"), i_conf_pre)
+        self.assertLess(i_conf_pre, body.index("data-src=conf-pre"))
+        self.assertLess(body.index("<h2>vpn://</h2>"), i_vpn_pre)
+        self.assertLess(i_vpn_pre, body.index("data-src=vpn-pre"))
+        self.assertEqual(body.count(">Скопировать<"), 2)
+        self.assertIn("navigator.clipboard.writeText", body)
+        self.assertIn("execCommand('copy')", body)
+
     def test_no_page_level_hscroll_css(self):
         from awg_panel.server import STYLE_CSS
         self.assertIn("body{", STYLE_CSS)
