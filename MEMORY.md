@@ -27,7 +27,7 @@
 - [x] выпустить 0.1.2: push master (10 коммитов) + тег v0.1.2 → CI build-deb.yml собирает релиз; локальная сборка в WSL OK (18222 байт, sha256 db112316…, все файлы root/root, sudoers 440, visudo parsed OK, postinst с баннером)
 - [x] e2e-повтор 0.1.2 на VPS: КРИТ — сервис в restart-loop `TLS load failed Permission denied` (журнал 152→161 рестарты); причина — postinst делал key.pem 600 при owner root:awgpanel, сервис User=awgpanel читать не может
 - [ ] выпустить 0.1.3: key.pem 640 + self-heal owner/perms при каждом configure (тест 16/16 OK), нужен push+тег и проверка на VPS
-- [ ] выпустить 0.1.8: push master + тег v0.1.8 → CI build-deb.yml (фиксы безопасности + README, тесты 29/29 OK)
+- [x] push 0.1.8: master ea5df27..801b7dd + тег v0.1.8 → CI build-deb.yml собирает .deb и Release; remote без токена, дерево чистое; тесты 29/29 OK. PAT из чата использован разово в URL пуша, в remote не сохранён — отозвать/перевыпустить.
 - [x] push 0.1.3: master 5fe8046..912d23b + тег v0.1.3 → CI build-deb.yml собирает .deb и Release; remote отчищен от токена, дерево в sync; токен был показан в чате — отозвать/перевыпустить
 - [x] push 0.1.4: master 912d23b..c89ee38 + тег v0.1.4 → CI build-deb.yml собирает .deb и Release; локальная сборка в WSL OK (18538 байт, sha256 88d8d4ed…, тесты 23/23 OK); остался e2e на VPS (upgrade поверх 0.1.3)
 
