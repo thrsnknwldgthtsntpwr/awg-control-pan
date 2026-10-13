@@ -28,12 +28,15 @@
 - [x] e2e-повтор 0.1.2 на VPS: КРИТ — сервис в restart-loop `TLS load failed Permission denied` (журнал 152→161 рестарты); причина — postinst делал key.pem 600 при owner root:awgpanel, сервис User=awgpanel читать не может
 - [ ] выпустить 0.1.3: key.pem 640 + self-heal owner/perms при каждом configure (тест 16/16 OK), нужен push+тег и проверка на VPS
 - [x] push 0.1.3: master 5fe8046..912d23b + тег v0.1.3 → CI build-deb.yml собирает .deb и Release; remote отчищен от токена, дерево в sync; токен был показан в чате — отозвать/перевыпустить
+- [x] 0.1.4 готов локально (28925cd): config webusername/webpassword + root-сервис без sudo (фикс rc=1); тесты 23/23 OK; нужен push+тег и проверка на VPS
 
 ## Решения
 - 2026-10-13: Память ведётся в этом файле (`MEMORY.md`) в корне каталога для работы в нескольких сессиях.
 - 2026-10-13: Проверены доступы: чтение / запись / удаление — OK. Каталог пуст, полные права есть.
 - 2026-10-13: Стек: Python stdlib http.server+ssl (без nginx), SSR+HTMX через CDN с деградацией без JS, один admin (PBKDF2, сессии в памяти, журнал в файл), HTTPS self-signed из postinst, сервис awgpanel+sudoers точечно, UFW не трогать, .deb arch=all с релизом на GitHub.
 - 2026-10-13: Underlay-контракт: list/stats/check/add/remove/regen через manage --json; show/dump целиком не показываем (PSK); server PrivateKey никогда в браузер; клиентские conf/vpnuri/png — через helper с валидацией имён; /proc только для вкладки Сервер.
+- 2026-10-13: 0.1.4 — упрощение auth: логин/пароль только `webusername`/`webpassword` в `[server]` config.ini (дефолт admin/admin, 600 root:root). Отдельный password-файл, PBKDF2 и `awg-panel-set-password-internal` удалены; `awg-panel-set-password` теперь правит config.ini. postinst мигрирует старые конфиги (дописывает дефолты) и чистит legacy.
+- 2026-10-13: 0.1.4 — фикс `manage check failed (rc=1)` / `list failed rc=1` + `sudo: unable to change to root gid` / `sudoers_audit`: причина — песочница service (CapabilityBoundingSet= пустой резал setuid для sudo; ProtectSystem=strict + ReadOnlyPaths делали /root/awg и /etc/amnezia read-only). Решение — сервис от root без sudo и строгой песочницы (только PrivateTmp); manage/helper вызываются напрямую; sudoers оставлен как legacy-conffile; из Depends убран sudo; key.pem снова 600 root:root.
 
 ## Журнал изменений
 - 2026-10-13: Инициализация памяти. Проверка доступов: `read` OK, `write` OK (` .access_test.tmp` создан и удалён), `icacls` — полные права. Каталог пуст.
