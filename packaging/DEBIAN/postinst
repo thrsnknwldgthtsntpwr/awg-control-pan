@@ -1,0 +1,52 @@
+#!/bin/bash
+# postinst: NEVER touches /root/awg or /etc/amnezia — only panel's own files.
+set -e
+case "$1" in
+  configure)
+    # system user
+    if ! id awgpanel >/dev/null 2>&1; then
+      useradd --system --no-create-home --home-dir /var/lib/awg-panel \
+        --shell /usr/sbin/nologin awgpanel
+    fi
+    mkdir -p /var/lib/awg-panel /var/log/awg-panel /etc/awg-panel
+    chown awgpanel:awgpanel /var/lib/awg-panel /var/log/awg-panel
+    chmod 700 /var/lib/awg-panel
+    # config default (do not overwrite existing)
+    if [ ! -f /etc/awg-panel/config.ini ]; then
+      cp /usr/share/awg-panel/config.ini.example /etc/awg-panel/config.ini
+    fi
+    chmod 640 /etc/awg-panel/config.ini
+    chown root:awgpanel /etc/awg-panel/config.ini || true
+    # self-signed cert (do not overwrite)
+    if [ ! -f /etc/awg-panel/cert.pem ] || [ ! -f /etc/awg-panel/key.pem ]; then
+      openssl req -x509 -newkey rsa:2048 -days 825 -nodes \
+        -subj "/CN=awg-panel" \
+        -keyout /etc/awg-panel/key.pem -out /etc/awg-panel/cert.pem
+      chmod 600 /etc/awg-panel/key.pem
+      chmod 644 /etc/awg-panel/cert.pem
+      chown root:awgpanel /etc/awg-panel/key.pem /etc/awg-panel/cert.pem || true
+    fi
+    # admin password (do not overwrite existing)
+    if [ ! -f /etc/awg-panel/password ]; then
+      PW="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16)"
+      /usr/sbin/awg-panel-set-password-internal "$PW"
+      chmod 640 /etc/awg-panel/password
+      chown root:awgpanel /etc/awg-panel/password || true
+      echo "awg-panel initial admin password: $PW" >&2
+      echo "$PW" > /root/.awg-panel-initial-password
+      chmod 600 /root/.awg-panel-initial-password || true
+      echo "Saved to /root/.awg-panel-initial-password (change via: sudo awg-panel-set-password)" >&2
+    fi
+    # sudoers validate
+    if command -v visudo >/dev/null 2>&1; then
+      visudo -c -f /etc/sudoers.d/awg-panel || echo "WARN: sudoers check failed" >&2
+    fi
+    chmod 440 /etc/sudoers.d/awg-panel || true
+    chmod 755 /usr/sbin/awg-panel-helper
+    systemctl daemon-reload || true
+    systemctl enable awg-panel.service || true
+    systemctl restart awg-panel.service || echo "WARN: start failed, see journalctl -u awg-panel" >&2
+    echo "OK: existing VPN users untouched. Open https://<server>:8443/" >&2
+    ;;
+esac
+exit 0

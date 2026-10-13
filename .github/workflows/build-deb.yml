@@ -1,0 +1,31 @@
+name: build-deb
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint (py_compile + shellcheck + visudo)
+        run: |
+          python3 -m py_compile src/awg_panel/*.py
+          python3 -m unittest discover -s tests -v
+          bash -n bin/awg-panel-helper
+          sudo visudo -c -f packaging/sudoers
+      - name: Build .deb
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          VER="${VER:-0.1.0}"
+          ./build_deb.sh "$VER"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: awg-panel-deb
+          path: dist/*.deb
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.deb

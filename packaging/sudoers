@@ -1,0 +1,9 @@
+# Least-privilege for awgpanel user (variant 1b). Managed by .deb.
+# Panel may only: run manage subcommands used by UI + read live files via helper.
+awgpanel ALL=(root) NOPASSWD: /bin/bash /root/awg/manage_amneziawg.sh --json --no-color list
+awgpanel ALL=(root) NOPASSWD: /bin/bash /root/awg/manage_amneziawg.sh --json --no-color stats
+awgpanel ALL=(root) NOPASSWD: /bin/bash /root/awg/manage_amneziawg.sh --json --no-color check
+awgpanel ALL=(root) NOPASSWD: /bin/bash /root/awg/manage_amneziawg.sh --json --no-color --yes add *
+awgpanel ALL=(root) NOPASSWD: /bin/bash /root/awg/manage_amneziawg.sh --json --no-color --yes remove *
+awgpanel ALL=(root) NOPASSWD: /bin/bash /root/awg/manage_amneziawg.sh --json --no-color --yes regen *
+awgpanel ALL=(root) NOPASSWD: /usr/sbin/awg-panel-helper *

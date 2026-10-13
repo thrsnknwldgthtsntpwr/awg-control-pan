@@ -1,0 +1,11 @@
+Package: awg-panel
+Version: 0.1.0
+Section: net
+Priority: optional
+Architecture: all
+Depends: python3, openssl, sudo, systemd
+Recommends: qrencode
+Maintainer: awg-panel <local>
+Description: Minimal router-like web UI over amneziawg-installer manage script
+ Read-only live state via manage --json and /proc, no own VPN DB.
+ Single admin auth, embedded HTTPS, no nginx needed.

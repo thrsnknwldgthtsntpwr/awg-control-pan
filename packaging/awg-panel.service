@@ -1,0 +1,22 @@
+[Unit]
+Description=AWG Panel (web UI over amneziawg-installer manage)
+After=network.target
+Wants=awg-quick@awg0.service
+
+[Service]
+Type=simple
+User=awgpanel
+Group=awgpanel
+ExecStart=/usr/bin/python3 -m awg_panel
+WorkingDirectory=/usr/share/awg-panel/src
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/log/awg-panel
+ReadOnlyPaths=/etc/awg-panel
+AmbientCapabilities=
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

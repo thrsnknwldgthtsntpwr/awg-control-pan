@@ -1,0 +1,32 @@
+#!/bin/bash
+# awg-panel-helper: safe root-owned file reads for the panel (called via sudo).
+# No separate storage: exposes live installer state, strips server secrets.
+set -u
+AWG_DIR="${AWG_DIR:-/root/awg}"
+SERVER_CONF="${SERVER_CONF:-/etc/amnezia/amneziawg/awg0.conf}"
+
+valid_name() { [[ "$1" =~ ^[a-zA-Z0-9_-]{1,63}$ ]]; }
+
+cmd="$1"; shift || exit 2
+case "$cmd" in
+  client-conf)
+    n="${1:-}"; valid_name "$n" || { echo "bad name" >&2; exit 2; }
+    f="$AWG_DIR/$n.conf"; [[ -f "$f" ]] || exit 1
+    cat -- "$f" ;;
+  client-uri)
+    n="${1:-}"; valid_name "$n" || { echo "bad name" >&2; exit 2; }
+    f="$AWG_DIR/$n.vpnuri"; [[ -f "$f" ]] || exit 1
+    cat -- "$f" ;;
+  client-qr)
+    n="${1:-}"; valid_name "$n" || { echo "bad name" >&2; exit 2; }
+    f="$AWG_DIR/$n.png"; [[ -f "$f" ]] || exit 1
+    cat -- "$f" ;;
+  server-pubkeys)
+    # Only names + public keys; PrivateKey never leaves the server this way.
+    grep -E '^#_Name = |^PublicKey = ' -- "$SERVER_CONF" ;;
+  init-info)
+    grep -E '^(AWG_PROTOCOL|SCRIPT_VERSION)=' -- "$AWG_DIR/awgsetup_cfg.init" ;;
+  *)
+    echo "usage: $0 client-conf|client-uri|client-qr <name>|server-pubkeys|init-info" >&2
+    exit 2 ;;
+esac

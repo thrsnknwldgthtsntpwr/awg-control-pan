@@ -1,0 +1,14 @@
+[server]
+# Слушать везде (панель-роутер) или только localhost — на выбор.
+host = 0.0.0.0
+port = 8443
+cert = /etc/awg-panel/cert.pem
+key = /etc/awg-panel/key.pem
+# Underlay инсталлера — не менять без нужды:
+manage_script = /root/awg/manage_amneziawg.sh
+awg_dir = /root/awg
+server_conf = /etc/amnezia/amneziawg/awg0.conf
+helper = /usr/sbin/awg-panel-helper
+password_file = /etc/awg-panel/password
+auth_log = /var/log/awg-panel/auth.log
+session_ttl_min = 30

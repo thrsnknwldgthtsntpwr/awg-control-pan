@@ -1,0 +1,13 @@
+#!/bin/bash
+set -e
+case "$1" in
+  remove|deconfigure)
+    systemctl stop awg-panel.service || true
+    ;;
+  purge)
+    rm -rf /var/lib/awg-panel
+    # config/password/certs stay unless purge explicitly wants removal;
+    # dpkg handles conffiles. Nothing in /root/awg touched ever.
+    ;;
+esac
+exit 0

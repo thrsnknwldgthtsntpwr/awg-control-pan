@@ -1,0 +1,10 @@
+#!/bin/bash
+set -e
+case "$1" in
+  purge)
+    rm -f /etc/sudoers.d/awg-panel
+    userdel awgpanel 2>/dev/null || true
+    ;;
+esac
+systemctl daemon-reload || true
+exit 0
