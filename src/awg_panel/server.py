@@ -537,7 +537,8 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/login":
             if self.auth.blocked(ip):
                 self.auth.journal(ip, "-", False, "rate-limited")
-                return self._send(429, self._page_login("Слишком много попыток, подождите 5 мин"))
+                mins = max(1, int(round(self.auth.lock_sec / 60)))
+                return self._send(429, self._page_login(f"Слишком много попыток, подождите {mins} мин"))
             try:
                 form = self._parse_form()
             except ValueError:
@@ -560,7 +561,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.auth.verify(user, pw):
                 self.auth.note_ok(ip)
                 self.auth.journal(ip, user, True)
-                s = self.auth.create(ip)
+                s = self.auth.create(ip, user)
                 return self._redirect("/status", self._set_session_cookie(s.sid))
             self.auth.note_fail(ip)
             self.auth.journal(ip, user, False, "bad credentials")
@@ -710,7 +711,13 @@ label{display:block;margin:8px 0}input[name=user],input[name=password],input[nam
 
 def run(cfg: PanelConfig):
     import os as _os
-    auth = AuthStore(cfg.webusername, cfg.webpassword, cfg.auth_log, cfg.session_ttl_min * 60)
+    from .config import MAX_USERS
+    if not isinstance(cfg.users, dict) or not cfg.users:
+        raise SystemExit("bad [users] config: нет пользователей (проверьте /etc/awg-panel/config.ini)")
+    if len(cfg.users) > MAX_USERS:
+        raise SystemExit(f"bad [users] config: больше {MAX_USERS} пользователей")
+    auth = AuthStore(cfg.users, cfg.auth_log, cfg.session_ttl_min * 60,
+                     cfg.auth_max_attempts, cfg.auth_lock_minutes * 60)
     Handler.cfg = cfg
     Handler.auth = auth
     if not (_os.path.isfile(cfg.cert) and _os.path.isfile(cfg.key)):

@@ -35,28 +35,56 @@ class TestValidate(unittest.TestCase):
 
 class TestAuth(unittest.TestCase):
     def test_verify_config_credentials(self):
-        st = AuthStore("admin", "s3cret-password", "/tmp/nonexistent-auth.log", 60)
+        st = AuthStore({"admin": "s3cret-password"}, "/tmp/nonexistent-auth.log", 60)
         self.assertTrue(st.verify("admin", "s3cret-password"))
         self.assertFalse(st.verify("admin", "wrong"))
         self.assertFalse(st.verify("other", "s3cret-password"))
         self.assertFalse(st.verify("", ""))
 
+    def test_verify_multi_no_cross_password(self):
+        st = AuthStore({"user1": "password1", "user2": "password2"},
+                       "/tmp/nonexistent-auth.log", 60)
+        self.assertTrue(st.verify("user1", "password1"))
+        self.assertTrue(st.verify("user2", "password2"))
+        # пароль от одного не подходит другому
+        self.assertFalse(st.verify("user1", "password2"))
+        self.assertFalse(st.verify("user2", "password1"))
+        self.assertFalse(st.verify("nosuch", "password1"))
+
     def test_sessions(self):
-        st = AuthStore("admin", "pw", "/tmp/nonexistent-auth.log", 60)
-        s = st.create("1.2.3.4")
+        st = AuthStore({"admin": "pw"}, "/tmp/nonexistent-auth.log", 60)
+        s = st.create("1.2.3.4", "admin")
         self.assertIsNotNone(st.get(s.sid))
         st.destroy(s.sid)
         self.assertIsNone(st.get(s.sid))
 
+    def test_session_stores_username(self):
+        st = AuthStore({"user1": "password1"}, "/tmp/nonexistent-auth.log", 60)
+        s = st.create("1.2.3.4", "user1")
+        got = st.get(s.sid)
+        self.assertIsNotNone(got)
+        self.assertEqual(got.username, "user1")
+
     def test_rate_limit(self):
-        st = AuthStore("admin", "pw", "/tmp/nonexistent-auth.log", 60)
+        st = AuthStore({"admin": "pw"}, "/tmp/nonexistent-auth.log", 60)
         for _ in range(5):
             st.note_fail("9.9.9.9")
         self.assertTrue(st.blocked("9.9.9.9"))
 
+    def test_rate_limit_custom(self):
+        import time
+        st = AuthStore({"admin": "pw"}, "/tmp/nonexistent-auth.log", 60, 3, 120)
+        st.note_fail("9.9.9.9")
+        st.note_fail("9.9.9.9")
+        self.assertFalse(st.blocked("9.9.9.9"))
+        st.note_fail("9.9.9.9")
+        self.assertTrue(st.blocked("9.9.9.9"))
+        _c, until, _l = st.fails["9.9.9.9"]
+        self.assertGreater(until, time.time() + 100)
+
     def test_rate_limit_gc(self):
         import time
-        st = AuthStore("admin", "pw", "/tmp/nonexistent-auth.log", 60)
+        st = AuthStore({"admin": "pw"}, "/tmp/nonexistent-auth.log", 60)
         st.fails["1.1.1.1"] = (2, 0.0, time.time() - 700)
         st._gc_fails()
         self.assertNotIn("1.1.1.1", st.fails)
@@ -88,6 +116,7 @@ class TestConfig(unittest.TestCase):
         cfg = load_config(path)
         self.assertEqual(cfg.webusername, "admin")
         self.assertEqual(cfg.webpassword, "admin")
+        self.assertEqual(cfg.users, {"admin": "admin"})
         # custom values
         with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
             f.write("[server]\nwebusername = boss\nwebpassword = s3cret\n")
@@ -95,6 +124,7 @@ class TestConfig(unittest.TestCase):
         cfg2 = load_config(path2)
         self.assertEqual(cfg2.webusername, "boss")
         self.assertEqual(cfg2.webpassword, "s3cret")
+        self.assertEqual(cfg2.users, {"boss": "s3cret"})
         # empty falls back to admin
         with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
             f.write("[server]\nwebusername = \nwebpassword = \n")
@@ -102,6 +132,107 @@ class TestConfig(unittest.TestCase):
         cfg3 = load_config(path3)
         self.assertEqual(cfg3.webusername, "admin")
         self.assertEqual(cfg3.webpassword, "admin")
+
+    def test_users_numbered(self):
+        import tempfile
+        from awg_panel.config import load_config
+        with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
+            f.write("[server]\nwebusername = boss\nwebpassword = s3cret\n"
+                    "[users]\nuser.1 = user1\npassword.1 = password1\n"
+                    "user.2 = user2\npassword.2 = password2\n")
+            path = f.name
+        cfg = load_config(path)
+        # [users] wins over legacy
+        self.assertEqual(cfg.users, {"user1": "password1", "user2": "password2"})
+
+    def test_users_legacy_fallback(self):
+        import tempfile
+        from awg_panel.config import load_config
+        with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
+            f.write("[server]\nwebusername = solo\nwebpassword = s3cret\n")
+            path = f.name
+        self.assertEqual(load_config(path).users, {"solo": "s3cret"})
+
+    def test_users_errors_fail_closed(self):
+        import tempfile
+        from awg_panel.config import load_config
+        cases = [
+            # password.2 без user.2
+            "[users]\nuser.1 = a\npassword.1 = p1\npassword.2 = p2\n",
+            # user.2 без password.2
+            "[users]\nuser.1 = a\npassword.1 = p1\nuser.2 = b\n",
+            # дубль логина
+            "[users]\nuser.1 = same\npassword.1 = p1\nuser.2 = same\npassword.2 = p2\n",
+            # плохой логин
+            "[users]\nuser.1 = bad name!\npassword.1 = p1\n",
+            # пустой пароль
+            "[users]\nuser.1 = a\npassword.1 = \n",
+            # неизвестный ключ
+            "[users]\nuser.1 = a\npassword.1 = p1\nfoo = bar\n",
+            # индекс вне диапазона
+            "[users]\nuser.255 = a\npassword.255 = p1\n",
+            "[users]\nuser.0 = a\npassword.0 = p1\n",
+        ]
+        for body in cases:
+            with self.subTest(body=body):
+                with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
+                    f.write("[server]\n" + body)
+                    path = f.name
+                with self.assertRaises(ValueError):
+                    load_config(path)
+
+    def test_users_duplicate_option_fails(self):
+        import tempfile
+        from awg_panel.config import load_config
+        with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
+            f.write("[users]\nuser.1 = a\npassword.1 = p1\nuser.1 = b\npassword.1 = p2\n")
+            path = f.name
+        with self.assertRaises(ValueError):
+            load_config(path)
+
+    def test_users_limit_254(self):
+        import tempfile
+        from awg_panel.config import MAX_USERS, load_config
+        self.assertEqual(MAX_USERS, 254)
+        lines = "".join(f"user.{i} = u{i}\npassword.{i} = p{i}\n" for i in range(1, 255))
+        with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
+            f.write("[server]\n[users]\n" + lines)
+            path = f.name
+        self.assertEqual(len(load_config(path).users), 254)
+        with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
+            f.write("[server]\n[users]\n" + lines + "user.255 = extra\npassword.255 = x\n")
+            path2 = f.name
+        with self.assertRaises(ValueError):
+            load_config(path2)
+
+    def test_auth_limits(self):
+        import tempfile
+        from awg_panel.config import load_config
+        with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
+            f.write("[server]\nauth_max_attempts = 3\nauth_lock_minutes = 10\n")
+            path = f.name
+        cfg = load_config(path)
+        self.assertEqual(cfg.auth_max_attempts, 3)
+        self.assertEqual(cfg.auth_lock_minutes, 10)
+        # defaults + clamp
+        with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
+            f.write("[server]\nport = 8443\n")
+            path2 = f.name
+        cfg2 = load_config(path2)
+        self.assertEqual(cfg2.auth_max_attempts, 5)
+        self.assertEqual(cfg2.auth_lock_minutes, 5)
+        with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
+            f.write("[server]\nauth_max_attempts = 0\nauth_lock_minutes = 99999\n")
+            path3 = f.name
+        cfg3 = load_config(path3)
+        self.assertEqual(cfg3.auth_max_attempts, 1)
+        self.assertEqual(cfg3.auth_lock_minutes, 1440)
+        with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
+            f.write("[server]\nauth_max_attempts = garbage\nauth_lock_minutes = garbage\n")
+            path4 = f.name
+        cfg4 = load_config(path4)
+        self.assertEqual(cfg4.auth_max_attempts, 5)
+        self.assertEqual(cfg4.auth_lock_minutes, 5)
 
 
 class TestManage(unittest.TestCase):
@@ -263,6 +394,12 @@ class TestPackaging(unittest.TestCase):
         self.assertIn("webusername = admin", example)
         self.assertIn("webpassword = admin", example)
         self.assertNotIn("password_file", example)
+        # 0.1.10: multi-user section + tunable rate-limit
+        self.assertIn("[users]", example)
+        self.assertIn("user.1 = admin", example)
+        self.assertIn("password.1 = admin", example)
+        self.assertIn("auth_max_attempts = 5", example)
+        self.assertIn("auth_lock_minutes = 5", example)
 
     def test_control_no_sudo_dep(self):
         control = (Path(__file__).resolve().parents[1] / "packaging" / "DEBIAN" / "control").read_text()

@@ -4,10 +4,14 @@ host = 0.0.0.0
 port = 8443
 cert = /etc/awg-panel/cert.pem
 key = /etc/awg-panel/key.pem
-# Логин/пароль веб-панели (обычные параметры). После правок:
+# Логин/пароль веб-панели (legacy, fallback когда нет [users]). После правок:
 # sudo systemctl restart awg-panel
 webusername = admin
 webpassword = admin
+# Блокировка входа средствами сервиса (НЕ iptables/ufw): N неверных попыток
+# с одного IP -> ответ 429 на auth_lock_minutes минут.
+auth_max_attempts = 5
+auth_lock_minutes = 5
 # Underlay инсталлера — не менять без нужды:
 manage_script = /root/awg/manage_amneziawg.sh
 awg_dir = /root/awg
@@ -15,3 +19,12 @@ server_conf = /etc/amnezia/amneziawg/awg0.conf
 helper = /usr/sbin/awg-panel-helper
 auth_log = /var/log/awg-panel/auth.log
 session_ttl_min = 30
+
+[users]
+# Пользователи панели (0.1.10+): пары user.N/password.N, N=1..254, max 254.
+# Этот раздел важнее webusername/webpassword. Ошибка в нём (дубль логина,
+# password.N без user.N, пустой пароль, >254) — отказ старта, смотрите journalctl.
+user.1 = admin
+password.1 = admin
+# user.2 = user2
+# password.2 = password2

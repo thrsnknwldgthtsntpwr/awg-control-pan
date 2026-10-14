@@ -43,8 +43,8 @@ sudo visudo -c -f packaging/sudoers
 | Класс | Что покрывает |
 |-------|---------------|
 | `TestValidate` | имена, `parse_names`, `expires_flag` (только дни, `1..3650`) |
-| `TestAuth` | verify, сессии, rate-limit 5/5мин, GC |
-| `TestConfig` | clamp портов/TTL, дефолты `webusername/webpassword` |
+| `TestAuth` | verify (мульти), сессии (+username), rate-limit настраиваемый, GC |
+| `TestConfig` | clamp портов/TTL/лимитов, дефолты `webusername/webpassword`, парсинг и валидация `[users]` (пары, лимит 254, отказ) |
 | `TestManage` | JSON-парсер, порядок `--expires` между `--yes` и `add`, прямой вызов без sudo от root |
 | `TestSystemInfo` | устойчивость к битому `/proc` |
 | `TestPackaging` | root-owned `.deb`, `postinst` (права, миграция, next-steps), `service User=root`, `control` без sudo |
@@ -55,8 +55,8 @@ sudo visudo -c -f packaging/sudoers
 ## Сборка .deb
 
 ```bash
-./build_deb.sh 0.1.9
-# → dist/awg-panel_0.1.9_all.deb (dist/ — в .gitignore)
+./build_deb.sh 0.1.10
+# → dist/awg-panel_0.1.10_all.deb (dist/ — в .gitignore)
 ```
 
 Что делает скрипт:

@@ -78,8 +78,8 @@ visudo -c
 
 ## Не пускает в панель / 429
 
-- Rate-limit: 5 неверных попыток → блок IP на 5 минут (`429 Too Many Attempts`). Подождите или зайдите с другого IP.
-- Проверьте `webusername/webpassword` в `/etc/awg-panel/config.ini` и рестарт сервиса после правок.
+- Rate-limit средствами сервиса (без `iptables`): `auth_max_attempts` неверных попыток → блок IP на `auth_lock_minutes` (дефолт `5/5мин`, `429 Too Many Attempts`). Подождите или зайдите с другого IP.
+- Проверьте пользователей (`[users]` `user.N/password.N`, fallback `webusername/webpassword`) в `/etc/awg-panel/config.ini` и рестарт сервиса после правок. Ошибка в `[users]` — отказ старта, смотрите `journalctl -u awg-panel`.
 - `X-Forwarded-For` игнорируется осознанно — лимит считается по socket-IP.
 
 ## Порт занят / не открывается

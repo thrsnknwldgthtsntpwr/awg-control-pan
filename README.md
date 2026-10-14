@@ -5,7 +5,7 @@
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
 ![Platform](https://img.shields.io/badge/platform-debian%20%7C%20ubuntu-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Version](https://img.shields.io/badge/version-0.1.9-blue)
+![Version](https://img.shields.io/badge/version-0.1.10-blue)
 
 Минималистичная веб-панель в стиле роутера поверх
 [bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer).
@@ -47,7 +47,7 @@
 | **Клиенты** | Таблица как `manage list --verbose`: имя, IP, префикс ключа, статус, RX/TX (`stats --json`), срок. Чекбоксы, массовое удаление, добавление нескольких имён разом. |
 | **Карточка клиента** | Блоки сверху вниз: **Пир → Конфиг → vpn:// → QR**. Кнопки: Пересоздать, Скачать `.conf`, `QR.png` (в новой вкладке), Скопировать для Конфига и `vpn://`. |
 | **Сроки** | При добавлении — только днями (`1..3650`, пусто = бессрочно). Чистку истёкших делает крон инсталлера. |
-| **Авторизация** | Один администратор, логин/пароль из `config.ini`. Сессии в памяти (sliding TTL + абсолютный лимит 12 ч), журнал входов в файл. Без 2FA/API — осознанно, см. [SECURITY.md](SECURITY.md). |
+| **Авторизация** | До 254 пользователей, логин/пароль из `config.ini` (`[users]` `user.N/password.N`; fallback — один `webusername/webpassword`). Сессии в памяти (sliding TTL + абсолютный лимит 12 ч, в сессии хранится имя), журнал входов в файл. Блок входа — средствами сервиса (`auth_max_attempts/auth_lock_minutes`, без `iptables`). Без 2FA/API — осознанно, см. [SECURITY.md](SECURITY.md). |
 | **Стек** | Только Python 3 stdlib (`http.server` + встроенный HTTPS). Чистый SSR — формы работают без JS. Единственный JS — same-origin `/static/copy.js` для кнопок «Скопировать». Без nginx, без CDN. |
 
 Что панель **не делает** (и не будет без обсуждения в Issues):
@@ -77,11 +77,11 @@
 На сервере, где уже стоит `amneziawg-installer`:
 
 ```bash
-# 1. Скачать .deb из Releases (например v0.1.9)
-wget https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases/download/v0.1.9/awg-panel_0.1.9_all.deb
+# 1. Скачать .deb из Releases (например v0.1.10)
+wget https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases/download/v0.1.10/awg-panel_0.1.10_all.deb
 
 # 2. Установить (именно dpkg — без предупреждения _apt о песочнице)
-sudo dpkg -i awg-panel_0.1.9_all.deb
+sudo dpkg -i awg-panel_0.1.10_all.deb
 
 # 3. Сменить пароль и открыть панель
 sudo awg-panel-set-password
@@ -142,7 +142,9 @@ sudo apt purge awg-panel        # удалить всё включая конф�
 | `host` | `0.0.0.0` | На каком адресе слушать. |
 | `port` | `8443` | Порт HTTPS. `1..65535`. |
 | `cert` / `key` | `/etc/awg-panel/cert.pem` / `key.pem` | Self-signed создаёт `postinst` (`key.pem` — `600`). |
-| `webusername` / `webpassword` | `admin` / `admin` | Логин/пароль панели. `%` разрешён, пробелы в пароле значимы. |
+| `webusername` / `webpassword` | `admin` / `admin` | Legacy (fallback без `[users]`). `%` разрешён, пробелы в пароле значимы. |
+| `[users]` `user.N` / `password.N` | — | До 254 пользователей (`N=1..254`), важнее legacy. Ошибки — отказ старта. |
+| `auth_max_attempts` / `auth_lock_minutes` | `5` / `5` | Блок IP средствами сервиса (`1..100` / `1..1440`), без `iptables/ufw`. |
 | `session_ttl_min` | `30` | Sliding TTL сессии, `1..1440`. Абсолютный лимит — 12 ч (в коде). |
 | `manage_script` | `/root/awg/manage_amneziawg.sh` | Путь к underlay-скрипту. |
 | `server_conf` | `/etc/amnezia/amneziawg/awg0.conf` | Только для чтения префиксов публичных ключей. |
@@ -233,12 +235,12 @@ awg-control-pan/
 │   ├── server.py        # роуты, сессии, HTML, /static/style.css + /static/copy.js
 │   ├── manage.py        # обёртка manage --json (без shell, капы stdout/батча)
 │   ├── system_info.py   # /proc: cpu/mem/disk/uptime/load/net
-│   ├── auth.py          # 1 админ, сессии в памяти, rate-limit, журнал
+│   ├── auth.py          # до 254 пользователей, сессии в памяти, rate-limit, журнал
 │   ├── config.py        # load_config() с clamp и fail-safe дефолтами
 │   └── validate.py      # имена, expires, parse_names
 ├── bin/
 │   ├── awg-panel-helper        # безопасные чтения live-файлов (bash, allowlist)
-│   └── awg-panel-set-password # смена webusername/webpassword (атомарно, 0600)
+│   └── awg-panel-set-password # смена user.1/password.1 в [users] (атомарно, 0600)
 ├── packaging/
 │   ├── DEBIAN/control, conffiles, postinst, prerm, postrm
 │   ├── awg-panel.service        # systemd-юнит (User=root, см. SECURITY.md почему)
@@ -263,7 +265,7 @@ awg-control-pan/
 Честная сводка (полная — [SECURITY.md](SECURITY.md)):
 
 - Приватный ключ сервера **никогда** не отдаётся в браузер; `awg show dump` целиком не показываем (там PSK); приватные ключи клиентов видит админ — как root через `manage`.
-- Все POST с CSRF (constant-time), редиректы `303`, кука `Secure; HttpOnly; SameSite=Lax`, rate-limit логина `5/5мин` по socket-IP (`X-Forwarded-For` игнорируется).
+- Все POST с CSRF (constant-time), редиректы `303`, кука `Secure; HttpOnly; SameSite=Lax`, rate-limit логина (`auth_max_attempts/auth_lock_minutes`, дефолт `5/5мин`) по socket-IP средствами сервиса без `iptables` (`X-Forwarded-For` игнорируется).
 - Заголовки: `nosniff / DENY / no-referrer / CSP default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' / HSTS / Permissions-Policy`.
 - Лимиты: тело форм 1 МиБ (`413` + разрыв keep-alive), max 2000 полей, max 100 имён в батче, stdout manage 1 МиБ, helper 2 МиБ, socket timeout 10 с.
 - Вызовы `manage`/`helper` — списком аргументов без shell; имена `^[A-Za-z0-9_-]{1,63}$`; `expires` — строго `--expires=\d+d`, `1..3650`.
@@ -280,14 +282,14 @@ awg-control-pan/
 # тесты (только stdlib, без pip/venv)
 python3 -m unittest discover -s tests -v
 
-# 30/30 OK на 0.1.9. Полный e2e — только на VPS с инсталлером
+# 39/39 OK на 0.1.10. Полный e2e — только на VPS с инсталлером
 # (нужны /root/awg/manage_amneziawg.sh и /etc/amnezia/.../awg0.conf)
 ```
 
 ```bash
 # локальная сборка .deb (нужен dpkg-deb; на Windows — в WSL)
-./build_deb.sh 0.1.9
-# → dist/awg-panel_0.1.9_all.deb
+./build_deb.sh 0.1.10
+# → dist/awg-panel_0.1.10_all.deb
 ```
 
 Детали кодстайла, тестов, релизного цикла — [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) и [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -338,13 +340,13 @@ cat /var/log/awg-panel/auth.log
 
 - Кратко: [CHANGELOG.md](CHANGELOG.md).
 - Файлы: [GitHub Releases](https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases) (`.deb` прикладывает CI по тегу `v*`).
-- Старые неработоспособные релизы до `0.1.8` удалены; git-теги `v0.1.1–v0.1.9` оставлены (при нужде `.deb` пересоберёт CI).
+- Старые неработоспособные релизы до `0.1.8` удалены; git-теги `v0.1.1–v0.1.10` оставлены (при нужде `.deb` пересоберёт CI).
 
 ---
 
 ## Участие в разработке
 
-PR приветствуются. Прочитайте [CONTRIBUTING.md](CONTRIBUTING.md): CRLF запрещён (`.gitattributes` держит LF для `postinst/helper/*.py`), тесты обязательны (`30/30`), коммиты — короткие imperative на английском или русском.
+PR приветствуются. Прочитайте [CONTRIBUTING.md](CONTRIBUTING.md): CRLF запрещён (`.gitattributes` держит LF для `postinst/helper/*.py`), тесты обязательны (`39/39`), коммиты — короткие imperative на английском или русском.
 
 ---
 

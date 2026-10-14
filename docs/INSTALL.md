@@ -19,7 +19,7 @@
 wget https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases/download/v0.1.9/awg-panel_0.1.9_all.deb
 
 # Рекомендуется именно dpkg:
-sudo dpkg -i awg-panel_0.1.9_all.deb
+sudo dpkg -i awg-panel_0.1.10_all.deb
 ```
 
 `postinst` делает только своё:
@@ -38,7 +38,7 @@ sudo dpkg -i awg-panel_0.1.9_all.deb
 ```bash
 # 1. Сменить дефолтный admin/admin
 sudo awg-panel-set-password
-# или вручную: правка /etc/awg-panel/config.ini → webusername/webpassword
+# или вручную: правка /etc/awg-panel/config.ini → [users] (user.N/password.N)
 
 # 2. Применить и проверить
 sudo systemctl restart awg-panel
@@ -57,7 +57,7 @@ sudo journalctl -u awg-panel -n 30 --no-pager
 sudo dpkg -i awg-panel_<новая-версия>_all.deb
 ```
 
-- Конфиг сохраняется (conffile): ваши `host/port/webusername/webpassword` не затрутся.
+- Конфиг сохраняется (conffile): ваши `host/port`, пользователи и лимиты не затрутся.
 - Недостающие ключи (например после апгрейда со старых версий) дописываются дефолтами.
 - Права лечатся при каждом upgrade (`key.pem 600`, `config.ini 600`, `sudoers 440 root:root`).
 

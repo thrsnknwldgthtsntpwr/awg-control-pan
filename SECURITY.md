@@ -4,8 +4,8 @@
 
 | Версия | Поддержка |
 |--------|-----------|
-| 0.1.9 (latest) | ✅ |
-| 0.1.8 | ✅ (только критические фиксы) |
+| 0.1.10 (latest) | ✅ |
+| 0.1.8–0.1.9 | ✅ (только критические фиксы) |
 | ≤ 0.1.7 | ❌ (обновитесь; релизы удалены, теги оставлены) |
 
 Актуальный changelog — [CHANGELOG.md](CHANGELOG.md), файлы — [Releases](https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases).
@@ -41,11 +41,11 @@
 
 ### Аутентификация и сессии
 
-- Один администратор, credentials из `/etc/awg-panel/config.ini` (`webusername/webpassword`, `600 root:root`).
-- Сравнение — constant-time (`hmac.compare_digest`), без падений на non-ASCII.
-- Сессии в памяти: случайные `sid`/`csrf` (`secrets.token_urlsafe(32)`), sliding TTL (`session_ttl_min`, дефолт 30 мин) + абсолютный лимит 12 ч, cap 1000 сессий (evict oldest, не `clear()`).
+- До 254 пользователей, credentials из `/etc/awg-panel/config.ini` (`[users]` `user.N/password.N`, `600 root:root`; fallback — legacy `webusername/webpassword` когда `[users]` нет). Ошибки `[users]` — отказ старта (fail-closed).
+- Сравнение — constant-time по всем записям без раннего выхода, без падений на non-ASCII.
+- Сессии в памяти: случайные `sid`/`csrf` (`secrets.token_urlsafe(32)`), sliding TTL (`session_ttl_min`, дефолт 30 мин) + абсолютный лимит 12 ч, cap 1000 сессий (evict oldest, не `clear()`). В сессии хранится имя пользователя.
 - Кука: `Secure; HttpOnly; SameSite=Lax; Max-Age=TTL`, перевыпускается при каждом authed-запросе (sliding).
-- Rate-limit логина: 5 неверных → блок IP на 5 мин (`429`), GC с cap 10000 IP (evict oldest, чтобы флуд случайными IP не разблокировал атакующего).
+- Rate-limit логина средствами сервиса (без `iptables/ufw/nftables`): `auth_max_attempts` неверных → блок IP на `auth_lock_minutes` (`429`, дефолт `5/5мин`), GC с cap 10000 IP (evict oldest, чтобы флуд случайными IP не разблокировал атакующего).
 - Журнал входов: `/var/log/awg-panel/auth.log` (`0600`, `O_APPEND`, поля без `\r\n`, обрезка длин).
 - Logout — только `POST` с CSRF (`GET /logout` — лишь подтверждение, сессию не убивает).
 
@@ -66,7 +66,7 @@
 
 ### Файлы и секреты
 
-- Пароль в `config.ini` в открытом виде (`600 root:root`, атомарная запись `mkstemp+replace`, `umask 077`); `%` разрешён (`interpolation=None`); пробелы в пароле значимы; битый ini → дефолты, а не падение.
+- Пароли в `config.ini` в открытом виде (`600 root:root`, атомарная запись `mkstemp+replace`, `umask 077`); `%` разрешён (`interpolation=None`); пробелы в пароле значимы; битый ini → дефолты, а не падение (кроме ошибок `[users]` и дублей опций — там отказ старта).
 - `key.pem` создаётся под `umask 077` (без окна `644`), сразу `600 root:root`; `cert.pem` — `644`.
 - `.deb` собирается `root-owned` (`chown -R 0:0` + `--root-owner-group`) — иначе повторение бага `0.1.1` (sudoers с `uid 1001` ломал весь sudo).
 

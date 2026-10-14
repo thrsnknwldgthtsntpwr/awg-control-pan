@@ -21,8 +21,10 @@ sudo systemctl restart awg-panel
 | `port` | `8443` | `1..65535`, иначе `8443` | Порт HTTPS. |
 | `cert` | `/etc/awg-panel/cert.pem` | путь | Создаёт `postinst` (self-signed, 825 дней). |
 | `key` | `/etc/awg-panel/key.pem` | путь | Создаётся под `umask 077`, права `600`. |
-| `webusername` | `admin` | trimmed, пусто → `admin` | Логин панели. |
-| `webpassword` | `admin` | **не** trim'ится (пробелы значимы), только `\r\n` срезаются; пусто/whitespace-only → `admin` | `%` разрешён (`interpolation=None`). |
+| `webusername` | `admin` | trimmed, пусто → `admin` | Legacy-логин (fallback, когда нет `[users]`). |
+| `webpassword` | `admin` | **не** trim'ится (пробелы значимы), только `\r\n` срезаются; пусто/whitespace-only → `admin` | `%` разрешён (`interpolation=None`). Legacy-пароль (fallback). |
+| `auth_max_attempts` | `5` | `1..100` (clamp) | Неверных попыток с одного IP до блокировки. Блок — средствами сервиса (`429`), без `iptables/ufw`. |
+| `auth_lock_minutes` | `5` | `1..1440` (clamp) | Время блокировки IP после исчерпания попыток. |
 | `session_ttl_min` | `30` | `1..1440` (clamp) | Sliding TTL. Абсолютный лимит сессии — 12 ч, захардкожен в `auth.py`. |
 | `manage_script` | `/root/awg/manage_amneziawg.sh` | путь | Underlay инсталлера. Менять только если инсталлер стоит нестандартно. |
 | `awg_dir` | `/root/awg` | путь | Каталог live-файлов клиентов (`*.conf`, `*.vpnuri`, `*.png`). |
@@ -39,9 +41,24 @@ sudo awg-panel-set-password
 sudo systemctl restart awg-panel
 ```
 
-Скрипт спросит `Логин панели [текущий]:`, затем дважды пароль. Пустой пароль запрещён, переводы строк запрещены, логин — `^[A-Za-z0-9_.\-]{1,64}$`.
+Скрипт спросит `Логин панели [текущий]:`, затем дважды пароль. Пустой пароль запрещён, переводы строк запрещены, логин — `^[A-Za-z0-9_.\-]{1,64}$`. Скрипт правит `user.1/password.1` в `[users]` (+ зеркалит в legacy `webusername/webpassword`), остальных пользователей не трогает.
 
-Вручную (эквивалент):
+## Несколько пользователей (0.1.10+)
+
+```ini
+[users]
+user.1 = admin
+password.1 = секрет1
+user.2 = user2
+password.2 = секрет2
+```
+
+- Пары строго `user.N/password.N`, `N=1..254`, max 254 пользователя. Пробелы в индексах/именах ключей не допускаются (`user. 1` — ошибка).
+- Логин: `^[A-Za-z0-9_.\-]{1,64}$`, уникален. Пароль: непустой, без `\r\n` (пробелы внутри значимы).
+- Любая ошибка (`password.N` без `user.N` и наоборот, дубль логина, пустой пароль, `>254`, неизвестный ключ, дубль опции) — **отказ старта**, смотрите `journalctl -u awg-panel`. Тихого fallback на `admin/admin` нет.
+- Когда `[users]` есть — legacy `webusername/webpassword` игнорируются. Когда нет — работает один пользователь из `[server]` как раньше.
+
+Вручную (эквивалент для одного пользователя):
 
 ```ini
 [server]

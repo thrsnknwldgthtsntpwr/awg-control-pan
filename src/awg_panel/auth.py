@@ -1,4 +1,4 @@
-"""Single-admin auth: credentials from config.ini, sessions in memory, journal to file."""
+"""Multi-user auth: credentials from config.ini [users], sessions in memory, journal to file."""
 from __future__ import annotations
 
 import hmac
@@ -20,21 +20,28 @@ class Session:
     created: float
     expires: float
     ip: str
+    username: str = ""
 
 
 @dataclass
 class AuthStore:
-    """Credentials come from PanelConfig (webusername/webpassword).
+    """Credentials come from PanelConfig.users (0.1.10+: [users] user.N /
+    password.N, max 254). Legacy single webusername/webpassword is resolved
+    into a one-entry users dict by load_config when [users] is absent.
 
-    Password is stored in clear in /etc/awg-panel/config.ini (mode 600,
+    Passwords are stored in clear in /etc/awg-panel/config.ini (mode 600,
     root-only): this is the requested simplification — no separate
     password file, no hashing. Comparison is constant-time.
     """
 
-    username: str = "admin"
-    password: str = field(default="admin", repr=False)
+    users: dict = field(default_factory=lambda: {"admin": "admin"}, repr=False)
     auth_log: str = "/var/log/awg-panel/auth.log"
     ttl_sec: int = 1800
+    # App-level login rate-limit (NOT iptables/ufw/nftables): the service
+    # itself answers 429 while an IP is blocked. max_attempts fails ->
+    # block IP for lock_sec seconds.
+    max_attempts: int = 5
+    lock_sec: int = 300
     # Absolute cap: sliding expiry refreshes `expires`, but `created` +
     # max_lifetime_sec bounds a stolen sid even under constant use.
     max_lifetime_sec: int = 12 * 3600
@@ -43,18 +50,47 @@ class AuthStore:
     fails: dict = field(default_factory=dict, repr=False)  # ip -> (count, blocked_until_ts, last_fail_ts)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
+    def __post_init__(self) -> None:
+        try:
+            self.max_attempts = int(self.max_attempts)
+        except (TypeError, ValueError):
+            self.max_attempts = 5
+        if self.max_attempts < 1:
+            self.max_attempts = 1
+        elif self.max_attempts > 100:
+            self.max_attempts = 100
+        try:
+            self.lock_sec = int(self.lock_sec)
+        except (TypeError, ValueError):
+            self.lock_sec = 300
+        if self.lock_sec < 60:
+            self.lock_sec = 60
+        elif self.lock_sec > 1440 * 60:
+            self.lock_sec = 1440 * 60
+        if not isinstance(self.users, dict) or not self.users:
+            self.users = {"admin": "admin"}
+
     def verify(self, username: str, password: str) -> bool:
         try:
-            u_ok = hmac.compare_digest(
-                str(username or "").encode("utf-8"), str(self.username or "").encode("utf-8"))
-            p_ok = hmac.compare_digest(
-                str(password or "").encode("utf-8"), str(self.password or "").encode("utf-8"))
-            return bool(u_ok and p_ok)
+            u = str(username or "")
+            p = str(password or "")
+            # Linear scan without early exit: no dict-lookup timing oracle
+            # for "user exists". Fine for <=254 users.
+            ok = False
+            for eu, ep in self.users.items():
+                u_ok = hmac.compare_digest(u.encode("utf-8"), str(eu or "").encode("utf-8"))
+                p_ok = hmac.compare_digest(p.encode("utf-8"), str(ep or "").encode("utf-8"))
+                ok = ok or (bool(u_ok and p_ok))
+            if not self.users:
+                return False
+            # When the name is unknown the loop above still ran over all
+            # entries, so timing is comparable; nothing extra needed.
+            return bool(ok)
         except Exception:
             return False
 
     # -- sessions --
-    def create(self, ip: str) -> Session:
+    def create(self, ip: str, username: str = "") -> Session:
         with self._lock:
             self._gc_locked()
             if len(self.sessions) >= self.max_sessions:
@@ -66,7 +102,7 @@ class AuthStore:
                     self.sessions.pop(k, None)
             now = time.time()
             s = Session(secrets.token_urlsafe(32), secrets.token_urlsafe(32),
-                        now, now + self.ttl_sec, _clean(ip, 64))
+                        now, now + self.ttl_sec, _clean(ip, 64), _clean(username, 64))
             self.sessions[s.sid] = s
             return s
 
@@ -119,7 +155,7 @@ class AuthStore:
             for k, _ in by_last[:1000]:
                 self.fails.pop(k, None)
 
-    # -- login rate limit: 5 fails -> block ip 5 min --
+    # -- login rate limit: max_attempts fails -> block ip for lock_sec --
     def blocked(self, ip: str) -> bool:
         with self._lock:
             self._gc_fails_locked()
@@ -138,8 +174,8 @@ class AuthStore:
             c = cur[0] if len(cur) >= 1 else 0
             until = cur[1] if len(cur) >= 2 else 0.0
             c += 1
-            if c >= 5:
-                until = now + 300
+            if c >= self.max_attempts:
+                until = now + self.lock_sec
                 c = 0
             self.fails[ip] = (c, until, now)
 
