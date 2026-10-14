@@ -741,6 +741,11 @@ class TestLoginPage(unittest.TestCase):
         self.assertIn("Неверный логин или пароль", body)
         self.assertIn("<nav></nav>", body)
 
+    def test_autofocus_on_username(self):
+        body = self._page()
+        self.assertIn("<input name=user autofocus>", body)
+        self.assertEqual(body.count("autofocus"), 1)
+
     def test_nav_present_elsewhere(self):
         from awg_panel import server as srv
         h = srv.Handler.__new__(srv.Handler)

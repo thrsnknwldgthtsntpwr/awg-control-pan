@@ -232,8 +232,8 @@ class Handler(BaseHTTPRequestHandler):
         msg = f'<p class=err>{e(err)}</p>' if err else ""
         return self._layout("Вход", "", f"<div class=card style='max-width:420px'><h1>Вход</h1>{msg}"
                            "<form method=post action=/login>"
-                           "<label>Логин<input name=user></label>"
-                           "<label>Пароль<input type=password name=password autofocus></label>"
+                           "<label>Логин<input name=user autofocus></label>"
+                           "<label>Пароль<input type=password name=password></label>"
                            "<button>Войти</button></form>"
                            "<p class=muted>Доступ задаётся администратором сервера.</p></div>", nav=False)
 

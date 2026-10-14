@@ -5,7 +5,7 @@
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
 ![Platform](https://img.shields.io/badge/platform-debian%20%7C%20ubuntu-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Version](https://img.shields.io/badge/version-0.1.16-blue)
+![Version](https://img.shields.io/badge/version-0.1.17-blue)
 
 Минималистичная веб-панель в стиле роутера поверх
 [bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer).
@@ -78,11 +78,11 @@
 На сервере, где уже стоит `amneziawg-installer`:
 
 ```bash
-# 1. Скачать .deb из Releases (например v0.1.16)
-wget https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases/download/v0.1.16/awg-panel_0.1.16_all.deb
+# 1. Скачать .deb из Releases (например v0.1.17)
+wget https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases/download/v0.1.17/awg-panel_0.1.17_all.deb
 
 # 2. Установить (именно dpkg — без предупреждения _apt о песочнице)
-sudo dpkg -i awg-panel_0.1.16_all.deb
+sudo dpkg -i awg-panel_0.1.17_all.deb
 
 # 3. Сменить пароль и открыть панель
 sudo awg-panel-set-password
@@ -249,7 +249,7 @@ awg-control-pan/
 │   ├── awg-panel.service        # systemd-юнит (User=root, см. SECURITY.md почему)
 │   ├── config.ini.example
 │   └── sudoers                  # для non-root/dev вызовов (в проде сервис от root, sudo не используется)
-├── tests/test_panel.py  # unittest, только stdlib (60 тестов на 0.1.16)
+├── tests/test_panel.py  # unittest, только stdlib (61 тест на 0.1.17)
 ├── build_deb.sh         # сборка .deb (root-owned, без pycache)
 ├── docs/                # INSTALL, CONFIGURATION, TROUBLESHOOTING, DEVELOPMENT (SECURITY.md — в корне)
 ├── .github/workflows/
@@ -285,14 +285,14 @@ awg-control-pan/
 # тесты (только stdlib, без pip/venv)
 python3 -m unittest discover -s tests -v
 
-# 60/60 OK на 0.1.16. Полный e2e — только на VPS с инсталлером
+# 61/61 OK на 0.1.17. Полный e2e — только на VPS с инсталлером
 # (нужны /root/awg/manage_amneziawg.sh и /etc/amnezia/.../awg0.conf)
 ```
 
 ```bash
 # локальная сборка .deb (нужен dpkg-deb; на Windows — в WSL)
-./build_deb.sh 0.1.16
-# → dist/awg-panel_0.1.16_all.deb
+./build_deb.sh 0.1.17
+# → dist/awg-panel_0.1.17_all.deb
 ```
 
 Детали кодстайла, тестов, релизного цикла — [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) и [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -343,13 +343,13 @@ cat /var/log/awg-panel/auth.log
 
 - Кратко: [CHANGELOG.md](CHANGELOG.md).
 - Файлы: [GitHub Releases](https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases) (`.deb` прикладывает CI по тегу `v*`).
-- Старые неработоспособные релизы до `0.1.8` удалены; git-теги `v0.1.1–v0.1.16` оставлены (при нужде `.deb` пересоберёт CI).
+- Старые неработоспособные релизы до `0.1.8` удалены; git-теги `v0.1.1–v0.1.17` оставлены (при нужде `.deb` пересоберёт CI).
 
 ---
 
 ## Участие в разработке
 
-PR приветствуются. Прочитайте [CONTRIBUTING.md](CONTRIBUTING.md): CRLF запрещён (`.gitattributes` держит LF для `postinst/helper/*.py`), тесты обязательны (`60/60`), коммиты — короткие imperative на английском или русском.
+PR приветствуются. Прочитайте [CONTRIBUTING.md](CONTRIBUTING.md): CRLF запрещён (`.gitattributes` держит LF для `postinst/helper/*.py`), тесты обязательны (`61/61`), коммиты — короткие imperative на английском или русском.
 
 ---
 
