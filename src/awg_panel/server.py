@@ -23,6 +23,9 @@ from .validate import expires_flag, parse_names, valid_client_name
 
 CSS = '<link rel="stylesheet" href="/static/style.css">'
 
+# Project home: version in the sidebar links here (new tab).
+GITHUB_URL = "https://github.com/thrsnknwldgthtsntpwr/awg-control-pan"
+
 # Cap form bodies to avoid OOM on huge POSTs.
 MAX_FORM_BYTES = 1 << 20  # 1 MiB
 # Cap batch sizes: 1 MiB of `sel=` is ~50k names -> ARG_MAX/fork-DoS.
@@ -206,7 +209,7 @@ class Handler(BaseHTTPRequestHandler):
         return bool(s and hmac_eq(tok, s.csrf))
 
     # ---------- pages ----------
-    def _layout(self, title: str, active: str, body: str, csrf: str = "") -> str:
+    def _layout(self, title: str, active: str, body: str, csrf: str = "", nav: bool = True) -> str:
         nav_links = "".join(
             f'<a href="{href}" class="{"on" if active==k else ""}">{label}</a>'
             for k, href, label in (("status", "/status", "Статус"),
@@ -217,11 +220,12 @@ class Handler(BaseHTTPRequestHandler):
                       f"<button type=submit class='navlink{' on' if active=='logout' else ''}'>Выход</button></form>")
         else:
             logout = '<a href="/logout">Выход</a>'
-        nav = nav_links + logout
+        nav = (nav_links + logout) if nav else ""
         return ("<!doctype html><html lang=ru><head><meta charset=utf-8>"
                 "<meta name=viewport content='width=device-width,initial-scale=1'>"
                 f"<title>{e(title)} — AWG Panel</title>{CSS}</head>"
-                f"<body><aside><div class=brand>AWG Panel<small>v{__version__}</small></div>"
+                f"<body><aside><div class=brand>AWG Panel<small><a href='{e(GITHUB_URL)}' "
+                f"target=_blank rel=noopener>v{__version__}</a></small></div>"
                 f"<nav>{nav}</nav></aside><main>{body}</main></body></html>")
 
     def _page_login(self, err=""):
@@ -231,7 +235,7 @@ class Handler(BaseHTTPRequestHandler):
                            "<label>Логин<input name=user></label>"
                            "<label>Пароль<input type=password name=password autofocus></label>"
                            "<button>Войти</button></form>"
-                           "<p class=muted>Доступ задаётся администратором сервера.</p></div>")
+                           "<p class=muted>Доступ задаётся администратором сервера.</p></div>", nav=False)
 
     def _page_status(self, tab: str) -> str:
         s = self._sess()
@@ -889,7 +893,7 @@ CLIENTS_TAG = '<script src="/static/clients.js" defer></script>'
 
 STYLE_CSS = """*{box-sizing:border-box}body{margin:0;font:14px/1.45 system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#eef1f5;color:#1f2937;display:flex;min-height:100vh;overflow-x:hidden}
 aside{width:220px;background:#1f2937;color:#cbd5e1;display:flex;flex-direction:column;padding:18px 0;flex-shrink:0}
-.brand{color:#fff;font-weight:700;font-size:18px;padding:0 20px 16px}.brand small{display:block;color:#94a3b8;font-weight:400;font-size:11px}
+.brand{color:#fff;font-weight:700;font-size:18px;padding:0 20px 16px}.brand small{display:block;color:#94a3b8;font-weight:400;font-size:11px}.brand small a{color:#94a3b8}
 nav a{display:block;color:#cbd5e1;text-decoration:none;padding:10px 20px}nav a.on,nav a:hover{background:#374151;color:#fff}
 nav form.navlogout{margin:0;padding:0}nav button.navlink{display:block;width:100%;text-align:left;background:none;border:0;color:#cbd5e1;padding:10px 20px;font:inherit;cursor:pointer;border-radius:0}nav button.navlink.on,nav button.navlink:hover{background:#374151;color:#fff}
 main{flex:1;padding:24px;max-width:1200px;min-width:0;overflow-x:hidden}h1{margin:0 0 16px;font-size:22px}.card{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:16px;min-width:0;max-width:100%}

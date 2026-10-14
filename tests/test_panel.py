@@ -717,6 +717,46 @@ class TestClientsListPage(unittest.TestCase):
         self.assertEqual(raw.decode("utf-8"), srv.CLIENTS_JS)
 
 
+class TestLoginPage(unittest.TestCase):
+    def _page(self, err=""):
+        from awg_panel import server as srv
+        h = srv.Handler.__new__(srv.Handler)
+        return h._page_login(err)
+
+    def test_no_nav_on_login(self):
+        body = self._page()
+        # синий сайдбар с заголовком остался, пунктов меню нет
+        self.assertIn("<aside>", body)
+        self.assertIn("AWG Panel", body)
+        self.assertIn("<nav></nav>", body)
+        self.assertNotIn(">Статус<", body)
+        self.assertNotIn(">Клиенты<", body)
+        self.assertNotIn(">Выход<", body)
+        self.assertNotIn("/logout", body)
+        self.assertNotIn("/clients", body)
+        self.assertNotIn("/status", body)
+
+    def test_login_error_shown_without_nav(self):
+        body = self._page("Неверный логин или пароль")
+        self.assertIn("Неверный логин или пароль", body)
+        self.assertIn("<nav></nav>", body)
+
+    def test_nav_present_elsewhere(self):
+        from awg_panel import server as srv
+        h = srv.Handler.__new__(srv.Handler)
+        full = h._layout("T", "status", "b", "csrf")
+        self.assertIn(">Статус<", full)
+        self.assertIn(">Клиенты<", full)
+
+    def test_version_links_to_github(self):
+        from awg_panel import __version__
+        from awg_panel.server import GITHUB_URL, STYLE_CSS
+        self.assertEqual(GITHUB_URL, "https://github.com/thrsnknwldgthtsntpwr/awg-control-pan")
+        body = self._page()
+        self.assertIn(f"<a href='{GITHUB_URL}' target=_blank rel=noopener>v{__version__}</a>", body)
+        self.assertIn(".brand small a{", STYLE_CSS)
+
+
 class TestHttpRedirect(unittest.TestCase):
     def test_build_url(self):
         from awg_panel.server import build_https_redirect_url

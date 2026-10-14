@@ -8,7 +8,7 @@ cd awg-control-pan
 
 # тесты — только stdlib, pip/venv не нужен
 python3 -m unittest discover -s tests -v
-# ожидаемо: 55/55 OK (на 0.1.14)
+# ожидаемо: 59/59 OK (на 0.1.15)
 ```
 
 Полный e2e — только на VPS с установленным инсталлером (нужны
@@ -49,6 +49,7 @@ sudo visudo -c -f packaging/sudoers
 | `TestSystemInfo` | устойчивость к битому `/proc` |
 | `TestPackaging` | root-owned `.deb`, `postinst` (права, next-steps без legacy), `service User=root`, `control` без sudo |
 | `TestClientPage` | порядок блоков Пир/Конфиг/vpn/QR, кнопки, copy.js-роут, CSS без page-h-scroll |
+| `TestLoginPage` | вход без меню, ссылка версии на GitHub |
 | `TestClientsListPage` | «Удалить выбранные» disabled без выбора, «Добавить»/«Удалить» в одном ряду, «Сгенерировать имя» + data-атрибуты, clients.js-роут |
 | `TestClientNames` | дефолты/кастом `[client_names]`, clamp `rand_bytes`, fallback плохого префикса, лимит длины 63 |
 | `TestHttpRedirect` | `http://:80 → 301 https://:port` (URL, Host-валидация, live-редирект без кук) |
@@ -58,8 +59,8 @@ sudo visudo -c -f packaging/sudoers
 ## Сборка .deb
 
 ```bash
-./build_deb.sh 0.1.14
-# → dist/awg-panel_0.1.14_all.deb (dist/ — в .gitignore)
+./build_deb.sh 0.1.15
+# → dist/awg-panel_0.1.15_all.deb (dist/ — в .gitignore)
 ```
 
 Что делает скрипт:
