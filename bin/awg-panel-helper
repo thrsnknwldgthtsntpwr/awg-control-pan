@@ -1,5 +1,5 @@
 #!/bin/bash
-# awg-panel-helper: safe root-owned file reads for the panel (called via sudo).
+# awg-panel-helper: safe root-owned file reads for the panel (called directly as root).
 # No separate storage: exposes live installer state, strips server secrets.
 # Paths are hardcoded: AWG_DIR/SERVER_CONF env is intentionally IGNORED
 # (sudo env_reset strips it anyway; accepting env would allow path redirect).

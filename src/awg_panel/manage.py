@@ -39,7 +39,7 @@ def _is_root() -> bool:
 def _base(manage_script: str) -> list[str]:
     # Production: service runs as root -> direct call, no sudo.
     # Fallback keeps non-root dev working.
-    # See packaging/sudoers and packaging/awg-panel.service.
+    # See packaging/awg-panel.service.
     if _is_root():
         return ["/bin/bash", manage_script]
     return ["/usr/bin/sudo", "-n", "/bin/bash", manage_script]

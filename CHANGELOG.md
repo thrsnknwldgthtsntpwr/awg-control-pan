@@ -3,6 +3,14 @@
 Формат: `## [версия] - дата` + списки `Added / Fixed / Changed / Security`.
 Теги: `v0.1.1`–`v0.1.17`. Релизы `.deb` на GitHub — с `0.1.8` (старые удалены, теги оставлены).
 
+## [Unreleased]
+
+### Changed
+
+- Stable-чистка после `0.1.17`: удалён `packaging/sudoers` (в проде не использовался с `0.1.4`, сервис от root) + все упоминания (`conffiles`, `build_deb.sh`, `postinst`/`postrm`, `visudo`-проверки в CI).
+- Убраны миграционные шимы: `useradd/userdel awgpanel`, чистка `set-password-internal` + `/etc/awg-panel/password` в `postinst`, чистка `webusername/webpassword` в `awg-panel-set-password` (нужны были только для апгрейда с версий до `0.1.4` / до `0.1.12`).
+- Тесты без sudoers-файла: allowlist helper проверяется кодом (`run_helper`), всего 61/61 OK.
+
 ## [0.1.17] - 2026-10-14
 
 ### Fixed

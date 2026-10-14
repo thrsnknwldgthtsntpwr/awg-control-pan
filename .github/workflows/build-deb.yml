@@ -13,12 +13,11 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Lint (py_compile + shellcheck + visudo)
+      - name: Lint (py_compile + shellcheck)
         run: |
           python3 -m py_compile src/awg_panel/*.py
           python3 -m unittest discover -s tests -v
           bash -n bin/awg-panel-helper
-          sudo visudo -c -f packaging/sudoers
       - name: Build .deb
         run: |
           VER="${GITHUB_REF_NAME#v}"

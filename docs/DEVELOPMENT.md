@@ -21,8 +21,6 @@ python3 -m unittest discover -s tests -v
 python3 -m py_compile src/awg_panel/*.py bin/awg-panel-set-password
 python3 -m unittest discover -s tests -v
 bash -n bin/awg-panel-helper packaging/DEBIAN/postinst build_deb.sh
-# если есть sudo + visudo:
-sudo visudo -c -f packaging/sudoers
 ```
 
 Те же проверки гоняет CI ([ci.yml](../.github/workflows/ci.yml)) на каждый push/PR.
@@ -67,8 +65,8 @@ sudo visudo -c -f packaging/sudoers
 
 1. Раскладывает `src/`, `bin/`, `packaging/` в `dist/awg-panel_<VER>_all/`.
 2. Чистит `__pycache__`/`*.pyc` (протухший байткод под `/usr` затенял бы фиксы при upgrade).
-3. Кладёт `control` с подставленной версией, `conffiles`, `postinst/prerm/postrm` (`755`), `service`, `sudoers` (`440`), дефолтный `config.ini`.
-4. Делает `chown -R 0:0` + `dpkg-deb --root-owner-group` (иначе повторение бага `0.1.1` с `uid 1001` в sudoers).
+3. Кладёт `control` с подставленной версией, `conffiles`, `postinst/prerm/postrm` (`755`), `service`, дефолтный `config.ini`.
+4. Делает `chown -R 0:0` + `dpkg-deb --root-owner-group` (иначе повторение бага `0.1.1` с `uid 1001` в файлах пакета).
 
 На Windows сборка — в WSL. Если репозиторий на `/mnt/d` с правами `777`, собирайте через `/tmp` (иначе `dpkg-deb` ругается на права staging-каталога).
 

@@ -248,13 +248,12 @@ awg-control-pan/
 │   ├── DEBIAN/control, conffiles, postinst, prerm, postrm
 │   ├── awg-panel.service        # systemd-юнит (User=root, см. SECURITY.md почему)
 │   ├── config.ini.example
-│   └── sudoers                  # для non-root/dev вызовов (в проде сервис от root, sudo не используется)
 ├── tests/test_panel.py  # unittest, только stdlib (61 тест на 0.1.17)
 ├── build_deb.sh         # сборка .deb (root-owned, без pycache)
 ├── docs/                # INSTALL, CONFIGURATION, TROUBLESHOOTING, DEVELOPMENT (SECURITY.md — в корне)
 ├── .github/workflows/
 │   ├── build-deb.yml    # сборка .deb + Release по тегу v*
-│   └── ci.yml           # py_compile + unittest + bash -n + visudo на push/PR
+│   └── ci.yml           # py_compile + unittest + bash -n на push/PR
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
 ├── SECURITY.md

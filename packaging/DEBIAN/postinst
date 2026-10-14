@@ -3,13 +3,6 @@
 set -e
 case "$1" in
   configure)
-    # Legacy system user (0.1.1-0.1.3 ran as awgpanel+sudo). 0.1.4+ runs
-    # as root (see awg-panel.service), user is no longer needed but kept
-    # for file ownership compat on upgrade; creation is harmless.
-    if ! id awgpanel >/dev/null 2>&1; then
-      useradd --system --no-create-home --home-dir /var/lib/awg-panel \
-        --shell /usr/sbin/nologin awgpanel || true
-    fi
     mkdir -p /var/lib/awg-panel /var/log/awg-panel /etc/awg-panel
     chown root:root /var/lib/awg-panel /var/log/awg-panel || true
     chmod 755 /var/lib/awg-panel /var/log/awg-panel || true
@@ -38,19 +31,6 @@ case "$1" in
     chown root:root /etc/awg-panel/key.pem /etc/awg-panel/cert.pem || true
     chmod 600 /etc/awg-panel/key.pem || true
     chmod 644 /etc/awg-panel/cert.pem || true
-    # cleanup of pre-0.1.4 password file + stdin setter (no longer used).
-    rm -f /usr/sbin/awg-panel-set-password-internal || true
-    rm -f /etc/awg-panel/password || true
-    # sudoers is unused in production (service runs as root, no sudo calls).
-    # Kept as conffile for clean upgrades; heal perms in case an old
-    # file with wrong owner is still around.
-    if [ -f /etc/sudoers.d/awg-panel ]; then
-      chown root:root /etc/sudoers.d/awg-panel || true
-      chmod 440 /etc/sudoers.d/awg-panel || true
-      if command -v visudo >/dev/null 2>&1; then
-        visudo -c -f /etc/sudoers.d/awg-panel || echo "WARN: sudoers check failed" >&2
-      fi
-    fi
     chmod 755 /usr/sbin/awg-panel-helper /usr/sbin/awg-panel-set-password || true
     systemctl daemon-reload || true
     systemctl enable awg-panel.service || true

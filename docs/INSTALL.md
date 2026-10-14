@@ -60,7 +60,7 @@ sudo dpkg -i awg-panel_<новая-версия>_all.deb
 ```
 
 - Конфиг сохраняется (conffile): ваши `host/port`, пользователи и лимиты не затрутся.
-- Права лечатся при каждом upgrade (`key.pem 600`, `config.ini 600`, `sudoers 440 root:root`).
+- Права лечатся при каждом upgrade (`key.pem 600`, `config.ini 600`).
 
 Откат: `sudo dpkg -i awg-panel_<старая>_all.deb` (конфиг сохранится).
 

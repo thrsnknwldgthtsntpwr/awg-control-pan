@@ -284,9 +284,8 @@ class TestManage(unittest.TestCase):
         r3 = _parse_json_output("not json", 0, "e")
         self.assertFalse(r3.ok)
 
-    def test_add_argv_order_matches_sudoers(self):
-        # Regression: --expires must sit between --yes and add,
-        # and sudoers must allow that shape (see packaging/sudoers).
+    def test_add_argv_order(self):
+        # Regression: --expires must sit between --yes and add.
         import subprocess
         from unittest import mock
         from awg_panel import manage
@@ -305,18 +304,17 @@ class TestManage(unittest.TestCase):
         yi = cmd.index("--yes")
         self.assertEqual(cmd[yi + 1], "--expires=7d")
         self.assertEqual(cmd[yi + 2], "add")
-        sudoers = (Path(__file__).resolve().parents[1] / "packaging" / "sudoers").read_text()
-        # Portable sudoers: single trailing `*` after --yes (embedded wildcards
-        # like --expires=* are rejected by sudo-rs). Must cover expires order.
-        rules = [l for l in sudoers.splitlines() if l.strip() and not l.strip().startswith("#")]
-        self.assertTrue(any(l.rstrip().endswith("--yes *") for l in rules))
-        self.assertFalse(any("--expires=" in l for l in rules))
 
-    def test_sudoers_helper_enumerated(self):
-        txt = (Path(__file__).resolve().parents[1] / "packaging" / "sudoers").read_text()
-        self.assertNotIn("awg-panel-helper *", txt)
-        for line in ("helper client-conf *", "helper server-pubkeys", "helper init-info"):
-            self.assertIn(line, txt)
+    def test_run_helper_allowlist(self):
+        # Helper allowlist is enforced in code (manage._HELPER_CMDS):
+        # unknown commands and stray args are rejected before exec.
+        from awg_panel import manage
+        with self.assertRaises(ValueError):
+            manage.run_helper("/usr/sbin/awg-panel-helper", "reboot")
+        with self.assertRaises(ValueError):
+            manage.run_helper("/usr/sbin/awg-panel-helper", "server-pubkeys", "extra")
+        with self.assertRaises(ValueError):
+            manage.run_helper("/usr/sbin/awg-panel-helper", "client-conf", "bad;name")
 
     def test_root_runs_direct_without_sudo(self):
         # Service runs as root -> manage/helper called directly.
@@ -359,22 +357,22 @@ class TestSystemInfo(unittest.TestCase):
 
 class TestPackaging(unittest.TestCase):
     def test_deb_files_root_owned(self):
-        # Regression: 0.1.1 built as uid 1001 shipped sudoers owned by 1001,
-        # which breaks ALL sudo on target ("should be 0").
+        # Regression: 0.1.1 built as uid 1001 shipped files owned by 1001.
         build = (Path(__file__).resolve().parents[1] / "build_deb.sh").read_text()
         self.assertIn("root-owner-group", build)
         self.assertIn("chown -R 0:0", build)
 
-    def test_postinst_heals_sudoers_owner(self):
+    def test_postinst_no_sudoers(self):
         postinst = (Path(__file__).resolve().parents[1] / "packaging" / "DEBIAN" / "postinst").read_text()
-        self.assertIn("chown root:root /etc/sudoers.d/awg-panel", postinst)
-        # chown must run before the visudo check, otherwise a broken
-        # owner still fails validation on upgrade.
-        self.assertLess(
-            postinst.index("chown root:root /etc/sudoers.d/awg-panel"),
-            postinst.index("visudo -c"),
+        self.assertNotIn("sudoers", postinst)
+        self.assertNotIn("visudo", postinst)
+        postrm = (Path(__file__).resolve().parents[1] / "packaging" / "DEBIAN" / "postrm").read_text()
+        self.assertNotIn("sudoers", postrm)
+        conffiles = (Path(__file__).resolve().parents[1] / "packaging" / "DEBIAN" / "conffiles").read_text()
+        self.assertNotIn("sudoers", conffiles)
+        self.assertFalse(
+            (Path(__file__).resolve().parents[1] / "packaging" / "sudoers").exists()
         )
-        self.assertIn("chmod 440 /etc/sudoers.d/awg-panel", postinst)
 
     def test_postinst_tls_key_root_only(self):
         # Service runs as root -> key 600 root:root.
@@ -396,10 +394,9 @@ class TestPackaging(unittest.TestCase):
             self.assertIn(marker, postinst)
         self.assertNotIn("webusername", postinst)
         self.assertNotIn("webpassword", postinst)
-        # legacy password-file flow is gone (only cleanup rm stays)
+        # legacy password-file flow is gone (cleanup removed in stable)
         self.assertNotIn("/root/.awg-panel-initial-password", postinst)
-        self.assertNotIn("| /usr/sbin/awg-panel-set-password-internal", postinst)
-        self.assertIn("rm -f /usr/sbin/awg-panel-set-password-internal", postinst)
+        self.assertNotIn("awg-panel-set-password-internal", postinst)
 
     def test_postinst_no_web_credentials_migration(self):
         postinst = (Path(__file__).resolve().parents[1] / "packaging" / "DEBIAN" / "postinst").read_text()
