@@ -313,7 +313,7 @@ cat /var/log/awg-panel/auth.log
 | `manage check failed (rc=1)` / `list failed` | `journalctl -u awg-panel`, права `/root/awg/manage_amneziawg.sh`, запущен ли `awg0` |
 | `TLS load failed ... Permission denied` (старые версии) | Починено в `0.1.4` (сервис от root, `key.pem 600 root:root` + self-heal). Обновитесь. |
 | `sudo ... is owned by uid 1001` (после `0.1.1`) | [TROUBLESHOOTING: sudo сломан](docs/TROUBLESHOOTING.md#sudo-сломан-после-011-is-owned-by-uid-1001) |
-| `N: ... недоступен для пользователя _apt` | Безвредно. Ставьте через `dpkg -i`, см. [INSTALL](docs/INSTALL.md#про-предупреждение-_apt). |
+| `N: ... недоступен для пользователя _apt` | Безвредно. Ставьте через `dpkg -i`, см. [INSTALL](docs/INSTALL.md#6-про-предупреждение-_apt). |
 
 ---
 
