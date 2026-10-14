@@ -8,7 +8,7 @@ cd awg-control-pan
 
 # тесты — только stdlib, pip/venv не нужен
 python3 -m unittest discover -s tests -v
-# ожидаемо: 53/53 OK (на 0.1.13)
+# ожидаемо: 55/55 OK (на 0.1.14)
 ```
 
 Полный e2e — только на VPS с установленным инсталлером (нужны
@@ -58,8 +58,8 @@ sudo visudo -c -f packaging/sudoers
 ## Сборка .deb
 
 ```bash
-./build_deb.sh 0.1.13
-# → dist/awg-panel_0.1.13_all.deb (dist/ — в .gitignore)
+./build_deb.sh 0.1.14
+# → dist/awg-panel_0.1.14_all.deb (dist/ — в .gitignore)
 ```
 
 Что делает скрипт:

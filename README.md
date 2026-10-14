@@ -5,7 +5,7 @@
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
 ![Platform](https://img.shields.io/badge/platform-debian%20%7C%20ubuntu-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Version](https://img.shields.io/badge/version-0.1.13-blue)
+![Version](https://img.shields.io/badge/version-0.1.14-blue)
 
 Минималистичная веб-панель в стиле роутера поверх
 [bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer).
@@ -78,11 +78,11 @@
 На сервере, где уже стоит `amneziawg-installer`:
 
 ```bash
-# 1. Скачать .deb из Releases (например v0.1.13)
-wget https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases/download/v0.1.13/awg-panel_0.1.13_all.deb
+# 1. Скачать .deb из Releases (например v0.1.14)
+wget https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases/download/v0.1.14/awg-panel_0.1.14_all.deb
 
 # 2. Установить (именно dpkg — без предупреждения _apt о песочнице)
-sudo dpkg -i awg-panel_0.1.13_all.deb
+sudo dpkg -i awg-panel_0.1.14_all.deb
 
 # 3. Сменить пароль и открыть панель
 sudo awg-panel-set-password
@@ -174,7 +174,7 @@ sudo systemctl restart awg-panel     # применить
 
 ### Клиенты
 
-- Добавление: `имена через пробел/запятую`, имя — `^[A-Za-z0-9_-]{1,63}$`, срок — `дней (пусто=∞)`, max 100 имён за раз. Кнопка «Сгенерировать имя» подставляет `prefix` + случайный hex из `[client_names]` (дефолт `user_` + 16 символов, аналог `openssl rand -hex 8`).
+- Добавление: `имена через пробел/запятую`, имя — `^[A-Za-z0-9_-]{1,63}$`, срок — `дней (пусто=∞)`, max 100 имён за раз. Кнопка «Сгенерировать имя» подставляет `prefix` + случайный hex из `[client_names]` (дефолт `user_` + 16 символов, аналог `openssl rand -hex 8`); повторные нажатия дописывают имена через пробел.
 - Удаление: чекбоксы + «Удалить выбранные» (тоже max 100); кнопка неактивна, пока ничего не выбрано. «Добавить» и «Удалить выбранные» — в одном ряду.
 - Пересоздание ключей («Пересоздать») — только из карточки клиента, по одному. Эндпоинт технически принимает батч, UI батч-regen не предлагает (защита от случайного слома всех конфигов разом).
 
@@ -249,7 +249,7 @@ awg-control-pan/
 │   ├── awg-panel.service        # systemd-юнит (User=root, см. SECURITY.md почему)
 │   ├── config.ini.example
 │   └── sudoers                  # для non-root/dev вызовов (в проде сервис от root, sudo не используется)
-├── tests/test_panel.py  # unittest, только stdlib (53 теста на 0.1.13)
+├── tests/test_panel.py  # unittest, только stdlib (55 тестов на 0.1.14)
 ├── build_deb.sh         # сборка .deb (root-owned, без pycache)
 ├── docs/                # INSTALL, CONFIGURATION, TROUBLESHOOTING, DEVELOPMENT (SECURITY.md — в корне)
 ├── .github/workflows/
@@ -285,14 +285,14 @@ awg-control-pan/
 # тесты (только stdlib, без pip/venv)
 python3 -m unittest discover -s tests -v
 
-# 53/53 OK на 0.1.13. Полный e2e — только на VPS с инсталлером
+# 55/55 OK на 0.1.14. Полный e2e — только на VPS с инсталлером
 # (нужны /root/awg/manage_amneziawg.sh и /etc/amnezia/.../awg0.conf)
 ```
 
 ```bash
 # локальная сборка .deb (нужен dpkg-deb; на Windows — в WSL)
-./build_deb.sh 0.1.13
-# → dist/awg-panel_0.1.13_all.deb
+./build_deb.sh 0.1.14
+# → dist/awg-panel_0.1.14_all.deb
 ```
 
 Детали кодстайла, тестов, релизного цикла — [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) и [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -343,13 +343,13 @@ cat /var/log/awg-panel/auth.log
 
 - Кратко: [CHANGELOG.md](CHANGELOG.md).
 - Файлы: [GitHub Releases](https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases) (`.deb` прикладывает CI по тегу `v*`).
-- Старые неработоспособные релизы до `0.1.8` удалены; git-теги `v0.1.1–v0.1.13` оставлены (при нужде `.deb` пересоберёт CI).
+- Старые неработоспособные релизы до `0.1.8` удалены; git-теги `v0.1.1–v0.1.14` оставлены (при нужде `.deb` пересоберёт CI).
 
 ---
 
 ## Участие в разработке
 
-PR приветствуются. Прочитайте [CONTRIBUTING.md](CONTRIBUTING.md): CRLF запрещён (`.gitattributes` держит LF для `postinst/helper/*.py`), тесты обязательны (`53/53`), коммиты — короткие imperative на английском или русском.
+PR приветствуются. Прочитайте [CONTRIBUTING.md](CONTRIBUTING.md): CRLF запрещён (`.gitattributes` держит LF для `postinst/helper/*.py`), тесты обязательны (`55/55`), коммиты — короткие imperative на английском или русском.
 
 ---
 

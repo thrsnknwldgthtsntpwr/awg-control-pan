@@ -551,6 +551,13 @@ class TestClientPage(unittest.TestCase):
         self.assertIn("createElement('textarea')", COPY_JS)
         self.assertIn("Не скопировалось", COPY_JS)
         self.assertIn("DOMContentLoaded", COPY_JS)
+        # 0.1.14: состояние «Скопировано» видно и цветом (класс copied),
+        # disabled-кнопки — серым текстом вместо чёрного.
+        self.assertIn("classList.add('copied')", COPY_JS)
+        self.assertIn("classList.remove('copied')", COPY_JS)
+        from awg_panel.server import STYLE_CSS as _CSS
+        self.assertIn("button.copied{", _CSS)
+        self.assertIn("button:disabled{", _CSS)
 
     def test_copy_js_static_route(self):
         # /static/copy.js must be served (200 + javascript) without auth,
@@ -662,6 +669,22 @@ class TestClientsListPage(unittest.TestCase):
         self.assertIn("getRandomValues", CLIENTS_JS)
         self.assertIn("Math.random", CLIENTS_JS)
         self.assertIn("data-prefix", CLIENTS_JS)
+
+    def test_generate_appends_with_space(self):
+        # повторный клик дописывает имя через пробел, а не затирает поле
+        from awg_panel.server import CLIENTS_JS
+        gen = CLIENTS_JS[CLIENTS_JS.index("function awgClientsGen"):]
+        self.assertIn("cur.replace(", gen)
+        self.assertIn("+' '+gen", gen)
+        self.assertIn("cur.trim()", gen)
+
+    def test_disabled_and_copied_styles(self):
+        from awg_panel.server import STYLE_CSS
+        dis = STYLE_CSS.split("button:disabled{", 1)[1].split("}", 1)[0]
+        self.assertIn("color:#9ca3af", dis)
+        self.assertIn("cursor:not-allowed", dis)
+        cop = STYLE_CSS.split("button.copied{", 1)[1].split("}", 1)[0]
+        self.assertIn("color:#9ca3af", cop)
 
     def test_clients_js_static_route(self):
         # /static/clients.js должен отдаваться (200 + javascript) без авторизации,
