@@ -892,10 +892,11 @@ CLIENTS_TAG = '<script src="/static/clients.js" defer></script>'
 
 
 STYLE_CSS = """*{box-sizing:border-box}body{margin:0;font:14px/1.45 system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#eef1f5;color:#1f2937;display:flex;min-height:100vh;overflow-x:hidden}
-aside{width:220px;background:#1f2937;color:#cbd5e1;display:flex;flex-direction:column;padding:18px 0;flex-shrink:0}
+aside{width:220px;background:#1f2937;color:#cbd5e1;display:flex;flex-direction:column;padding:18px 0;flex-shrink:0;position:sticky;top:0;height:100vh;overflow-y:auto}
 .brand{color:#fff;font-weight:700;font-size:18px;padding:0 20px 16px}.brand small{display:block;color:#94a3b8;font-weight:400;font-size:11px}.brand small a{color:#94a3b8}
 nav a{display:block;color:#cbd5e1;text-decoration:none;padding:10px 20px}nav a.on,nav a:hover{background:#374151;color:#fff}
-nav form.navlogout{margin:0;padding:0}nav button.navlink{display:block;width:100%;text-align:left;background:none;border:0;color:#cbd5e1;padding:10px 20px;font:inherit;cursor:pointer;border-radius:0}nav button.navlink.on,nav button.navlink:hover{background:#374151;color:#fff}
+nav{display:flex;flex-direction:column;flex:1}
+nav form.navlogout{margin:auto 0 0;padding:12px 0 0}nav form.navlogout:before{content:"";display:block;border-top:1px solid #374151;margin-bottom:12px}nav button.navlink{display:block;width:100%;text-align:left;background:none;border:0;color:#cbd5e1;padding:10px 20px;font:inherit;cursor:pointer;border-radius:0}nav button.navlink.on,nav button.navlink:hover{background:#374151;color:#fff}
 main{flex:1;padding:24px;max-width:1200px;min-width:0;overflow-x:hidden}h1{margin:0 0 16px;font-size:22px}.card{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:16px;min-width:0;max-width:100%}
 table{width:100%;border-collapse:collapse;background:#fff}th,td{border:1px solid #e2e8f0;padding:8px;text-align:left;font-size:13px}th{background:#f1f5f9}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.grid>*{min-width:0}.stack{display:flex;flex-direction:column;gap:16px}.stack>.card{margin-bottom:0}.row{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}.actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center}.actions form{margin:0}

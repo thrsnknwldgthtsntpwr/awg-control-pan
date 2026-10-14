@@ -748,6 +748,23 @@ class TestLoginPage(unittest.TestCase):
         self.assertIn(">Статус<", full)
         self.assertIn(">Клиенты<", full)
 
+    def test_logout_pinned_to_bottom(self):
+        from awg_panel import server as srv
+        h = srv.Handler.__new__(srv.Handler)
+        body = h._layout("T", "status", "b", "csrf")
+        # «Выход» идёт последним в nav, CSS прижимает его к низу сайдбара
+        self.assertLess(body.index("/clients"), body.index("navlogout"))
+        self.assertIn("nav{display:flex", srv.STYLE_CSS)
+        self.assertIn("flex-direction:column", srv.STYLE_CSS)
+        logout_rule = srv.STYLE_CSS.split("nav form.navlogout{", 1)[1].split("}", 1)[0]
+        self.assertIn("margin:auto 0 0", logout_rule)
+        # сайдбар привязан к вьюпорту: низ меню = низ видимой части,
+        # скроллить страницу ради «Выхода» не нужно
+        aside_rule = srv.STYLE_CSS.split("aside{", 1)[1].split("}", 1)[0]
+        self.assertIn("position:sticky", aside_rule)
+        self.assertIn("top:0", aside_rule)
+        self.assertIn("height:100vh", aside_rule)
+
     def test_version_links_to_github(self):
         from awg_panel import __version__
         from awg_panel.server import GITHUB_URL, STYLE_CSS
