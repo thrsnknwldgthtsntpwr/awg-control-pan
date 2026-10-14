@@ -94,64 +94,48 @@ class TestConfig(unittest.TestCase):
     def test_clamp(self):
         import tempfile
         from awg_panel.config import load_config
+        users = "[users]\nuser.1 = admin\npassword.1 = admin\n"
         with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
-            f.write("[server]\nhost = \nport = 99999\nsession_ttl_min = 0\n")
+            f.write("[server]\nhost = \nport = 99999\nsession_ttl_min = 0\n" + users)
             path = f.name
         cfg = load_config(path)
         self.assertEqual(cfg.host, "0.0.0.0")
         self.assertEqual(cfg.port, 8443)
         self.assertEqual(cfg.session_ttl_min, 1)
         with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
-            f.write("[server]\nsession_ttl_min = 9999\n")
+            f.write("[server]\nsession_ttl_min = 9999\n" + users)
             path2 = f.name
         self.assertEqual(load_config(path2).session_ttl_min, 1440)
-
-    def test_web_credentials(self):
-        import tempfile
-        from awg_panel.config import load_config
-        # defaults when missing
-        with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
-            f.write("[server]\nport = 8443\n")
-            path = f.name
-        cfg = load_config(path)
-        self.assertEqual(cfg.webusername, "admin")
-        self.assertEqual(cfg.webpassword, "admin")
-        self.assertEqual(cfg.users, {"admin": "admin"})
-        # custom values
-        with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
-            f.write("[server]\nwebusername = boss\nwebpassword = s3cret\n")
-            path2 = f.name
-        cfg2 = load_config(path2)
-        self.assertEqual(cfg2.webusername, "boss")
-        self.assertEqual(cfg2.webpassword, "s3cret")
-        self.assertEqual(cfg2.users, {"boss": "s3cret"})
-        # empty falls back to admin
-        with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
-            f.write("[server]\nwebusername = \nwebpassword = \n")
-            path3 = f.name
-        cfg3 = load_config(path3)
-        self.assertEqual(cfg3.webusername, "admin")
-        self.assertEqual(cfg3.webpassword, "admin")
 
     def test_users_numbered(self):
         import tempfile
         from awg_panel.config import load_config
         with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
-            f.write("[server]\nwebusername = boss\nwebpassword = s3cret\n"
+            f.write("[server]\nport = 8443\n"
                     "[users]\nuser.1 = user1\npassword.1 = password1\n"
                     "user.2 = user2\npassword.2 = password2\n")
             path = f.name
         cfg = load_config(path)
-        # [users] wins over legacy
         self.assertEqual(cfg.users, {"user1": "password1", "user2": "password2"})
 
-    def test_users_legacy_fallback(self):
+    def test_users_required_fail_closed(self):
         import tempfile
         from awg_panel.config import load_config
+        # нет секции [users] -> отказ старта (обратной совместимости нет)
+        with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
+            f.write("[server]\nport = 8443\n")
+            path = f.name
+        with self.assertRaises(ValueError):
+            load_config(path)
+        # старые ключи webusername/webpassword игнорируются и не спасают
         with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
             f.write("[server]\nwebusername = solo\nwebpassword = s3cret\n")
-            path = f.name
-        self.assertEqual(load_config(path).users, {"solo": "s3cret"})
+            path2 = f.name
+        with self.assertRaises(ValueError):
+            load_config(path2)
+        # нет файла -> отказ старта
+        with self.assertRaises(ValueError):
+            load_config("/tmp/awg-panel-no-such-config-12345.ini")
 
     def test_users_errors_fail_closed(self):
         import tempfile
@@ -208,27 +192,28 @@ class TestConfig(unittest.TestCase):
     def test_auth_limits(self):
         import tempfile
         from awg_panel.config import load_config
+        users = "[users]\nuser.1 = admin\npassword.1 = admin\n"
         with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
-            f.write("[server]\nauth_max_attempts = 3\nauth_lock_minutes = 10\n")
+            f.write("[server]\nauth_max_attempts = 3\nauth_lock_minutes = 10\n" + users)
             path = f.name
         cfg = load_config(path)
         self.assertEqual(cfg.auth_max_attempts, 3)
         self.assertEqual(cfg.auth_lock_minutes, 10)
         # defaults + clamp
         with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
-            f.write("[server]\nport = 8443\n")
+            f.write("[server]\nport = 8443\n" + users)
             path2 = f.name
         cfg2 = load_config(path2)
         self.assertEqual(cfg2.auth_max_attempts, 5)
         self.assertEqual(cfg2.auth_lock_minutes, 5)
         with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
-            f.write("[server]\nauth_max_attempts = 0\nauth_lock_minutes = 99999\n")
+            f.write("[server]\nauth_max_attempts = 0\nauth_lock_minutes = 99999\n" + users)
             path3 = f.name
         cfg3 = load_config(path3)
         self.assertEqual(cfg3.auth_max_attempts, 1)
         self.assertEqual(cfg3.auth_lock_minutes, 1440)
         with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
-            f.write("[server]\nauth_max_attempts = garbage\nauth_lock_minutes = garbage\n")
+            f.write("[server]\nauth_max_attempts = garbage\nauth_lock_minutes = garbage\n" + users)
             path4 = f.name
         cfg4 = load_config(path4)
         self.assertEqual(cfg4.auth_max_attempts, 5)
@@ -248,7 +233,7 @@ class TestManage(unittest.TestCase):
 
     def test_add_argv_order_matches_sudoers(self):
         # Regression: --expires must sit between --yes and add,
-        # and legacy sudoers must allow that shape (see packaging/sudoers).
+        # and sudoers must allow that shape (see packaging/sudoers).
         import subprocess
         from unittest import mock
         from awg_panel import manage
@@ -281,8 +266,8 @@ class TestManage(unittest.TestCase):
             self.assertIn(line, txt)
 
     def test_root_runs_direct_without_sudo(self):
-        # 0.1.4: service runs as root -> manage/helper called directly.
-        # Sudo path is only a fallback for legacy non-root installs.
+        # Service runs as root -> manage/helper called directly.
+        # Sudo path is only a fallback for non-root dev runs.
         from unittest import mock
         from awg_panel import manage
         with mock.patch.object(manage, "_is_root", lambda: True):
@@ -339,9 +324,7 @@ class TestPackaging(unittest.TestCase):
         self.assertIn("chmod 440 /etc/sudoers.d/awg-panel", postinst)
 
     def test_postinst_tls_key_root_only(self):
-        # 0.1.4: service runs as root -> key 600 root:root.
-        # (0.1.2 was 600 root:awgpanel = restart-loop; 0.1.3 was 640
-        # root:awgpanel for the awgpanel user. Both obsolete now.)
+        # Service runs as root -> key 600 root:root.
         postinst = (Path(__file__).resolve().parents[1] / "packaging" / "DEBIAN" / "postinst").read_text()
         self.assertIn("chmod 600 /etc/awg-panel/key.pem", postinst)
         self.assertIn("chown root:root /etc/awg-panel/key.pem", postinst)
@@ -354,19 +337,21 @@ class TestPackaging(unittest.TestCase):
             "systemctl restart awg-panel",
             "awg-panel-set-password",
             "https://<IP",
-            "webusername",
-            "webpassword",
+            "[users]",
+            "user.N/password.N",
         ):
             self.assertIn(marker, postinst)
+        self.assertNotIn("webusername", postinst)
+        self.assertNotIn("webpassword", postinst)
         # legacy password-file flow is gone (only cleanup rm stays)
         self.assertNotIn("/root/.awg-panel-initial-password", postinst)
         self.assertNotIn("| /usr/sbin/awg-panel-set-password-internal", postinst)
         self.assertIn("rm -f /usr/sbin/awg-panel-set-password-internal", postinst)
 
-    def test_postinst_migrates_web_credentials(self):
+    def test_postinst_no_web_credentials_migration(self):
         postinst = (Path(__file__).resolve().parents[1] / "packaging" / "DEBIAN" / "postinst").read_text()
-        self.assertIn("webusername = admin", postinst)
-        self.assertIn("webpassword = admin", postinst)
+        self.assertNotIn("webusername", postinst)
+        self.assertNotIn("webpassword", postinst)
         self.assertIn("chmod 600 /etc/awg-panel/config.ini", postinst)
 
     def test_postrm_purge_full_cleanup(self):
@@ -387,12 +372,7 @@ class TestPackaging(unittest.TestCase):
         self.assertNotIn("/etc/amnezia", code)
 
     def test_service_runs_as_root_without_sudo_breaking_sandbox(self):
-        # Regression 0.1.3: User=awgpanel + CapabilityBoundingSet=(empty) +
-        # ProtectSystem=strict + ReadOnlyPaths broke sudo:
-        # "unable to change to root gid: Operation not permitted",
-        # "error initializing audit plugin sudoers_audit" ->
-        # "manage check failed (rc=1)" / "list failed rc=1" in UI.
-        # 0.1.4 runs as root with no such sandbox.
+        # Regression: User=awgpanel + sandbox broke sudo, service runs as root.
         svc = (Path(__file__).resolve().parents[1] / "packaging" / "awg-panel.service").read_text()
         # Only real directives count — comments describe the old breakage.
         directives = [l for l in svc.splitlines() if l.strip() and not l.strip().startswith("#")]
@@ -406,17 +386,17 @@ class TestPackaging(unittest.TestCase):
         self.assertNotIn("ProtectSystem=strict", body)
         self.assertNotIn("ProtectHome=read-only", body)
 
-    def test_config_example_has_web_credentials(self):
+    def test_config_example_has_users_only(self):
         example = (Path(__file__).resolve().parents[1] / "packaging" / "config.ini.example").read_text()
-        self.assertIn("webusername = admin", example)
-        self.assertIn("webpassword = admin", example)
+        self.assertNotIn("webusername", example)
+        self.assertNotIn("webpassword", example)
         self.assertNotIn("password_file", example)
-        # 0.1.10: multi-user section + tunable rate-limit
         self.assertIn("[users]", example)
         self.assertIn("user.1 = admin", example)
         self.assertIn("password.1 = admin", example)
         self.assertIn("auth_max_attempts = 5", example)
         self.assertIn("auth_lock_minutes = 5", example)
+        self.assertIn("http_redirect_port = 80", example)
 
     def test_control_no_sudo_dep(self):
         control = (Path(__file__).resolve().parents[1] / "packaging" / "DEBIAN" / "control").read_text()
@@ -599,20 +579,21 @@ class TestHttpRedirect(unittest.TestCase):
     def test_config_redirect_port(self):
         import tempfile
         from awg_panel.config import load_config
+        users = "[users]\nuser.1 = admin\npassword.1 = admin\n"
         with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
-            f.write("[server]\nport = 8443\n")
+            f.write("[server]\nport = 8443\n" + users)
             p = f.name
         self.assertEqual(load_config(p).http_redirect_port, 80)
         with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
-            f.write("[server]\nport = 8443\nhttp_redirect_port = 0\n")
+            f.write("[server]\nport = 8443\nhttp_redirect_port = 0\n" + users)
             p2 = f.name
         self.assertEqual(load_config(p2).http_redirect_port, 0)
         with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
-            f.write("[server]\nport = 8443\nhttp_redirect_port = garbage\n")
+            f.write("[server]\nport = 8443\nhttp_redirect_port = garbage\n" + users)
             p3 = f.name
         self.assertEqual(load_config(p3).http_redirect_port, 80)
         with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
-            f.write("[server]\nport = 8443\nhttp_redirect_port = 99999\n")
+            f.write("[server]\nport = 8443\nhttp_redirect_port = 99999\n" + users)
             p4 = f.name
         self.assertEqual(load_config(p4).http_redirect_port, 80)
 

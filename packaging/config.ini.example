@@ -7,10 +7,7 @@ port = 8443
 http_redirect_port = 80
 cert = /etc/awg-panel/cert.pem
 key = /etc/awg-panel/key.pem
-# Логин/пароль веб-панели (legacy, fallback когда нет [users]). После правок:
-# sudo systemctl restart awg-panel
-webusername = admin
-webpassword = admin
+# После правок: sudo systemctl restart awg-panel
 # Блокировка входа средствами сервиса (НЕ iptables/ufw): N неверных попыток
 # с одного IP -> ответ 429 на auth_lock_minutes минут.
 auth_max_attempts = 5
@@ -24,9 +21,9 @@ auth_log = /var/log/awg-panel/auth.log
 session_ttl_min = 30
 
 [users]
-# Пользователи панели (0.1.10+): пары user.N/password.N, N=1..254, max 254.
-# Этот раздел важнее webusername/webpassword. Ошибка в нём (дубль логина,
-# password.N без user.N, пустой пароль, >254) — отказ старта, смотрите journalctl.
+# Пользователи панели: пары user.N/password.N, N=1..254, max 254.
+# Любая ошибка (дубль логина, password.N без user.N, пустой пароль,
+# >254, неизвестный ключ) — отказ старта, смотрите journalctl.
 user.1 = admin
 password.1 = admin
 # user.2 = user2

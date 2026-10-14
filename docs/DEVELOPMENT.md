@@ -8,7 +8,7 @@ cd awg-control-pan
 
 # тесты — только stdlib, pip/venv не нужен
 python3 -m unittest discover -s tests -v
-# ожидаемо: 30/30 OK (на 0.1.9)
+# ожидаемо: 43/43 OK (на 0.1.12)
 ```
 
 Полный e2e — только на VPS с установленным инсталлером (нужны
@@ -44,19 +44,20 @@ sudo visudo -c -f packaging/sudoers
 |-------|---------------|
 | `TestValidate` | имена, `parse_names`, `expires_flag` (только дни, `1..3650`) |
 | `TestAuth` | verify (мульти), сессии (+username), rate-limit настраиваемый, GC |
-| `TestConfig` | clamp портов/TTL/лимитов, дефолты `webusername/webpassword`, парсинг и валидация `[users]` (пары, лимит 254, отказ) |
+| `TestConfig` | clamp портов/TTL/лимитов, обязательная секция `[users]` (отказ без неё), парсинг и валидация `[users]` (пары, лимит 254, отказ) |
 | `TestManage` | JSON-парсер, порядок `--expires` между `--yes` и `add`, прямой вызов без sudo от root |
 | `TestSystemInfo` | устойчивость к битому `/proc` |
-| `TestPackaging` | root-owned `.deb`, `postinst` (права, миграция, next-steps), `service User=root`, `control` без sudo |
+| `TestPackaging` | root-owned `.deb`, `postinst` (права, next-steps без legacy), `service User=root`, `control` без sudo |
 | `TestClientPage` | порядок блоков Пир/Конфиг/vpn/QR, кнопки, copy.js-роут, CSS без page-h-scroll |
+| `TestHttpRedirect` | `http://:80 → 301 https://:port` (URL, Host-валидация, live-редирект без кук) |
 
 Новый фикс = новый регресс-тест. Правило простое: «упало на VPS → тест, потом фикс».
 
 ## Сборка .deb
 
 ```bash
-./build_deb.sh 0.1.11
-# → dist/awg-panel_0.1.11_all.deb (dist/ — в .gitignore)
+./build_deb.sh 0.1.12
+# → dist/awg-panel_0.1.12_all.deb (dist/ — в .gitignore)
 ```
 
 Что делает скрипт:

@@ -4,8 +4,8 @@
 
 | Версия | Поддержка |
 |--------|-----------|
-| 0.1.11 (latest) | ✅ |
-| 0.1.8–0.1.10 | ✅ (только критические фиксы) |
+| 0.1.12 (latest) | ✅ |
+| 0.1.8–0.1.11 | ✅ (только критические фиксы) |
 | ≤ 0.1.7 | ❌ (обновитесь; релизы удалены, теги оставлены) |
 
 Актуальный changelog — [CHANGELOG.md](CHANGELOG.md), файлы — [Releases](https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases).
@@ -41,7 +41,7 @@
 
 ### Аутентификация и сессии
 
-- До 254 пользователей, credentials из `/etc/awg-panel/config.ini` (`[users]` `user.N/password.N`, `600 root:root`; fallback — legacy `webusername/webpassword` когда `[users]` нет). Ошибки `[users]` — отказ старта (fail-closed).
+- До 254 пользователей, credentials только из `/etc/awg-panel/config.ini` (`[users]` `user.N/password.N`, `600 root:root`). Нет секции или ошибка в `[users]` — отказ старта (fail-closed).
 - Сравнение — constant-time по всем записям без раннего выхода, без падений на non-ASCII.
 - Сессии в памяти: случайные `sid`/`csrf` (`secrets.token_urlsafe(32)`), sliding TTL (`session_ttl_min`, дефолт 30 мин) + абсолютный лимит 12 ч, cap 1000 сессий (evict oldest, не `clear()`). В сессии хранится имя пользователя.
 - Кука: `Secure; HttpOnly; SameSite=Lax; Max-Age=TTL`, перевыпускается при каждом authed-запросе (sliding).
@@ -59,7 +59,7 @@
 ### Вызовы manage / helper
 
 - Только списком аргументов, без shell. Имена клиентов: `^[A-Za-z0-9_-]{1,63}$` (валидация и в Python, и в helper).
-- `expires` собирается только внутри (`^--expires=\d+d$`, `1..3650`) — порядок `--yes --expires=Nd add` зафиксирован тестом под legacy-sudoers.
+- `expires` собирается только внутри (`^--expires=\d+d$`, `1..3650`) — порядок `--yes --expires=Nd add` зафиксирован тестом под sudoers.
 - Helper — allowlist из 5 команд (`client-conf | client-uri | client-qr <name> | server-pubkeys | init-info`), пути захардкожены (`/root/awg`, `awg0.conf`), env игнорируется, symlink отклоняются, `PATH` зажат.
 - Серверный `PrivateKey` не отдаётся никогда (helper публикует только `#_Name` / `PublicKey`); `awg show dump` целиком не показываем (там PSK); приватные ключи клиентов видит админ — как root через `manage`.
 - Ошибки `manage/helper` в UI обобщены (`rc=...`), детали — только в stderr сервиса (`journalctl`).
@@ -78,7 +78,7 @@
 - `sudo: error initializing audit plugin sudoers_audit`,
 - в UI: `manage check failed (rc=1)` / `list failed (rc=1)`.
 
-Причина — песочница systemd (`CapabilityBoundingSet=` резал setuid, `ProtectSystem=strict + ReadOnlyPaths` делали `/root/awg` read-only). Прослойка не добавляла безопасности, но ломала всё. Поэтому с `0.1.4` юнит минимальный (`PrivateTmp` only, `User=root`), вызовы прямые, `sudoers` оставлен как legacy-conffile для чистых upgrade. Компромисс покрыт регресс-тестами (`TestPackaging`, `TestManage`).
+Причина — песочница systemd (`CapabilityBoundingSet=` резал setuid, `ProtectSystem=strict + ReadOnlyPaths` делали `/root/awg` read-only). Прослойка не добавляла безопасности, но ломала всё. Поэтому юнит минимальный (`PrivateTmp` only, `User=root`), вызовы прямые, `sudoers` оставлен для чистых upgrade. Компромисс покрыт регресс-тестами (`TestPackaging`, `TestManage`).
 
 ## Рекомендации оператору
 

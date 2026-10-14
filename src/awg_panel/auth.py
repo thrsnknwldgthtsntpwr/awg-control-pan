@@ -25,9 +25,8 @@ class Session:
 
 @dataclass
 class AuthStore:
-    """Credentials come from PanelConfig.users (0.1.10+: [users] user.N /
-    password.N, max 254). Legacy single webusername/webpassword is resolved
-    into a one-entry users dict by load_config when [users] is absent.
+    """Credentials come from PanelConfig.users ([users] user.N /
+    password.N, max 254).
 
     Passwords are stored in clear in /etc/awg-panel/config.ini (mode 600,
     root-only): this is the requested simplification — no separate

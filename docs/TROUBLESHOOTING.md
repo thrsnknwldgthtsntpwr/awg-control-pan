@@ -79,7 +79,7 @@ visudo -c
 ## Не пускает в панель / 429
 
 - Rate-limit средствами сервиса (без `iptables`): `auth_max_attempts` неверных попыток → блок IP на `auth_lock_minutes` (дефолт `5/5мин`, `429 Too Many Attempts`). Подождите или зайдите с другого IP.
-- Проверьте пользователей (`[users]` `user.N/password.N`, fallback `webusername/webpassword`) в `/etc/awg-panel/config.ini` и рестарт сервиса после правок. Ошибка в `[users]` — отказ старта, смотрите `journalctl -u awg-panel`.
+- Проверьте `[users]` (`user.N/password.N`, `N=1..254`) в `/etc/awg-panel/config.ini` и рестарт сервиса после правок. Нет секции, пустая секция или любая ошибка в `[users]` — отказ старта, смотрите `journalctl -u awg-panel`.
 - `X-Forwarded-For` игнорируется осознанно — лимит считается по socket-IP.
 
 ## Порт занят / не открывается
@@ -110,5 +110,5 @@ Self-signed сертификат — это нормально: браузер �
 sudo systemctl status awg-panel --no-pager
 sudo journalctl -u awg-panel -n 50 --no-pager
 dpkg -l | grep awg-panel
-cat /etc/awg-panel/config.ini | sed 's/webpassword.*/webpassword = ***/'
+cat /etc/awg-panel/config.ini | sed 's/^password\..*/password.N = ***/'
 ```

@@ -22,14 +22,6 @@ case "$1" in
       chown root:root /etc/awg-panel/config.ini || true
       umask 022
     fi
-    # migrate: existing configs from <=0.1.3 have no webusername/webpassword
-    # (auth was via /etc/awg-panel/password). Append defaults if missing.
-    if ! grep -Eq '^[[:space:]]*webusername[[:space:]]*=' /etc/awg-panel/config.ini 2>/dev/null; then
-      printf '\nwebusername = admin\n' >> /etc/awg-panel/config.ini
-    fi
-    if ! grep -Eq '^[[:space:]]*webpassword[[:space:]]*=' /etc/awg-panel/config.ini 2>/dev/null; then
-      printf 'webpassword = admin\n' >> /etc/awg-panel/config.ini
-    fi
     # config holds the web password in clear -> root-only.
     chmod 600 /etc/awg-panel/config.ini || true
     chown root:root /etc/awg-panel/config.ini || true
@@ -46,13 +38,12 @@ case "$1" in
     chown root:root /etc/awg-panel/key.pem /etc/awg-panel/cert.pem || true
     chmod 600 /etc/awg-panel/key.pem || true
     chmod 644 /etc/awg-panel/cert.pem || true
-    # legacy cleanup (0.1.4+): auth is webusername/webpassword in config.ini,
-    # separate password file + stdin setter are no longer used.
+    # cleanup of pre-0.1.4 password file + stdin setter (no longer used).
     rm -f /usr/sbin/awg-panel-set-password-internal || true
     rm -f /etc/awg-panel/password || true
-    # sudoers is legacy too (service runs as root, no sudo calls).
+    # sudoers is unused in production (service runs as root, no sudo calls).
     # Kept as conffile for clean upgrades; heal perms in case an old
-    # 0.1.1-style file with wrong owner is still around.
+    # file with wrong owner is still around.
     if [ -f /etc/sudoers.d/awg-panel ]; then
       chown root:root /etc/sudoers.d/awg-panel || true
       chmod 440 /etc/sudoers.d/awg-panel || true
@@ -72,8 +63,7 @@ case "$1" in
     fi
     cat >&2 <<EOF
 awg-panel установлен. Существующие VPN-пользователи не тронуты.
-  1. Логин/пароль: /etc/awg-panel/config.ini (webusername/webpassword, дефолт admin/admin).
-     Мульти (0.1.10+): секция [users] (user.N/password.N, N=1..254, max 254) — важнее webusername/webpassword.
+  1. Логин/пароль: /etc/awg-panel/config.ini, секция [users] (user.N/password.N, N=1..254, max 254).
      Лимит входа: auth_max_attempts/auth_lock_minutes (дефолт 5/5, блок средствами сервиса, без iptables).
      Сменить пароль: sudo awg-panel-set-password  (или правка config.ini вручную).
      После правок: sudo systemctl restart awg-panel

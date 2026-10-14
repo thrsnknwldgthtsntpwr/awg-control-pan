@@ -26,7 +26,7 @@ sudo dpkg -i awg-panel_0.1.10_all.deb
 
 `postinst` делает только своё:
 
-- `/etc/awg-panel/config.ini` (создаёт `600 root:root`, существующий не перезаписывает, дописывает недостающие `webusername/webpassword`);
+- `/etc/awg-panel/config.ini` (создаёт `600 root:root`, существующий не перезаписывает);
 - self-signed `cert.pem`/`key.pem` (`key.pem` — `600 root:root`, `umask 077` без окна `644`);
 - `/var/lib/awg-panel`, `/var/log/awg-panel`;
 - `systemctl enable + restart awg-panel`.
@@ -40,7 +40,7 @@ sudo dpkg -i awg-panel_0.1.10_all.deb
 ```bash
 # 1. Сменить дефолтный admin/admin
 sudo awg-panel-set-password
-# или вручную: правка /etc/awg-panel/config.ini → [users] (user.N/password.N)
+# или вручную: правка /etc/awg-panel/config.ini → [users] user.1/password.1
 
 # 2. Применить и проверить
 sudo systemctl restart awg-panel
@@ -60,7 +60,6 @@ sudo dpkg -i awg-panel_<новая-версия>_all.deb
 ```
 
 - Конфиг сохраняется (conffile): ваши `host/port`, пользователи и лимиты не затрутся.
-- Недостающие ключи (например после апгрейда со старых версий) дописываются дефолтами.
 - Права лечатся при каждом upgrade (`key.pem 600`, `config.ini 600`, `sudoers 440 root:root`).
 
 Откат: `sudo dpkg -i awg-panel_<старая>_all.deb` (конфиг сохранится).

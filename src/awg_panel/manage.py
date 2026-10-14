@@ -1,8 +1,8 @@
 """Thin wrapper over manage_amneziawg.sh --json (single source of VPN truth).
 
-No local DB: every call shells out directly. The service runs as root
-(0.1.4+), so no sudo is used in production. The sudo path below is only
-a fallback for legacy installs still running as `awgpanel` and for dev.
+No local DB: every call shells out directly. The service runs as root,
+so no sudo is used in production. The sudo path below is only
+a fallback for non-root dev runs.
 Long ops (repair-module/restore) are intentionally NOT exposed in phase 1.
 """
 from __future__ import annotations
@@ -37,9 +37,9 @@ def _is_root() -> bool:
 
 
 def _base(manage_script: str) -> list[str]:
-    # Production (0.1.4+): service runs as root -> direct call, no sudo.
-    # Fallback keeps old awgpanel+sudo installs and non-root dev working.
-    # See packaging/sudoers (legacy) and packaging/awg-panel.service.
+    # Production: service runs as root -> direct call, no sudo.
+    # Fallback keeps non-root dev working.
+    # See packaging/sudoers and packaging/awg-panel.service.
     if _is_root():
         return ["/bin/bash", manage_script]
     return ["/usr/bin/sudo", "-n", "/bin/bash", manage_script]
@@ -157,8 +157,8 @@ def _parse(p: "subprocess.CompletedProcess[str]") -> ManageResult:
 def run_helper(helper: str, *args: str, timeout: int = 15) -> tuple[int, bytes, str]:
     """Call /usr/sbin/awg-panel-helper for safe file reads. Returns (rc, stdout_bytes, stderr).
 
-    Production runs as root -> direct call. Sudo fallback only for legacy
-    awgpanel-user installs / non-root dev.
+    Production runs as root -> direct call. Sudo fallback only for
+    non-root dev runs.
     """
     if not args or args[0] not in _HELPER_CMDS:
         raise ValueError(f"helper cmd not allowed: {args[:1]!r}")

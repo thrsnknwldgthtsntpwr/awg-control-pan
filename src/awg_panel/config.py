@@ -11,7 +11,7 @@ _LOGIN_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,64}$")
 _USER_KEY_RE = re.compile(r"^user\.(\d+)$")
 _PASS_KEY_RE = re.compile(r"^password\.(\d+)$")
 
-# Hard cap on panel users (0.1.10+): [users] user.N/password.N, N = 1..254.
+# Hard cap on panel users: [users] user.N/password.N, N = 1..254.
 MAX_USERS = 254
 
 
@@ -30,11 +30,7 @@ class PanelConfig:
     helper: str = "/usr/sbin/awg-panel-helper"
     auth_log: str = "/var/log/awg-panel/auth.log"
     session_ttl_min: int = 30
-    # Legacy single-user fallback (pre-0.1.10): used only when [users]
-    # section is absent. When [users] is present it takes precedence.
-    webusername: str = "admin"
-    webpassword: str = field(default="admin", repr=False)
-    # Canonical user map (0.1.10+): username -> password.
+    # Canonical user map: username -> password (from [users] only).
     users: dict = field(default_factory=dict, repr=False)
     # Login rate-limit (app-level IP block, NOT iptables/ufw/nftables):
     # auth_max_attempts fails -> block IP for auth_lock_minutes.
@@ -42,15 +38,14 @@ class PanelConfig:
     auth_lock_minutes: int = 5
 
 
-def _parse_users(cp: configparser.ConfigParser) -> dict | None:
-    """Parse [users] section. Returns None when section is absent/empty
-    (caller falls back to legacy single user). Raises ValueError on any
-    inconsistency: startup must fail closed, never silently remap pairs."""
+def _parse_users(cp: configparser.ConfigParser) -> dict:
+    """Parse mandatory [users] section. Raises ValueError when missing or
+    inconsistent: startup must fail closed, never fall back to defaults."""
     if "users" not in cp:
-        return None
+        raise ValueError("config [users]: секция отсутствует (нужны user.N/password.N)")
     raw = dict(cp["users"])
     if not raw:
-        return None
+        raise ValueError("config [users]: секция пуста (нужны user.N/password.N)")
     user_idx: dict[int, str] = {}
     pass_idx: dict[int, str] = {}
     for key, val in raw.items():
@@ -75,7 +70,7 @@ def _parse_users(cp: configparser.ConfigParser) -> dict | None:
         raise ValueError(f"config [users]: неизвестный ключ {key!r} (нужны user.N/password.N)")
     idxs = set(user_idx) | set(pass_idx)
     if not idxs:
-        return None
+        raise ValueError("config [users]: секция пуста (нужны user.N/password.N)")
     if len(idxs) > MAX_USERS:
         raise ValueError(f"config [users]: больше {MAX_USERS} пользователей")
     users: dict[str, str] = {}
@@ -104,21 +99,17 @@ def load_config(path: str = "/etc/awg-panel/config.ini") -> PanelConfig:
     cfg = PanelConfig()
     p = Path(path)
     if not p.is_file():
-        cfg.users = {cfg.webusername: cfg.webpassword}
-        return cfg
+        raise ValueError(f"config not found: {path} (нужна секция [users])")
     cp = configparser.ConfigParser(interpolation=None)
     try:
         cp.read(p, encoding="utf-8")
         s = cp["server"] if "server" in cp else {}
     except configparser.DuplicateOptionError as ex:
-        # Duplicates must fail closed: silent fallback to admin/admin
-        # would open the panel (or lock everyone out) without a trace.
+        # Duplicates must fail closed: silent fallback would open the panel
+        # (or lock everyone out) without a trace.
         raise ValueError(f"config duplicate option: {ex}")
-    except (configparser.Error, OSError, UnicodeDecodeError):
-        # Broken config (no section header, bad encoding, unreadable):
-        # fail safe to defaults instead of crashing the service.
-        cfg.users = {cfg.webusername: cfg.webpassword}
-        return cfg
+    except (configparser.Error, OSError, UnicodeDecodeError) as ex:
+        raise ValueError(f"config unreadable: {ex}")
     host = (s.get("host", cfg.host) or "").strip() or cfg.host
     cfg.host = host if _HOST_RE.match(host) else "0.0.0.0"
     try:
@@ -140,15 +131,6 @@ def load_config(path: str = "/etc/awg-panel/config.ini") -> PanelConfig:
     cfg.server_conf = (s.get("server_conf", cfg.server_conf) or cfg.server_conf).strip() or cfg.server_conf
     cfg.helper = (s.get("helper", cfg.helper) or cfg.helper).strip() or cfg.helper
     cfg.auth_log = (s.get("auth_log", cfg.auth_log) or cfg.auth_log).strip() or cfg.auth_log
-    cfg.webusername = (s.get("webusername", cfg.webusername) or cfg.webusername).strip() or "admin"
-    # Passwords are NOT stripped: spaces are significant. Only treat
-    # whitespace-only as missing. ConfigParser with interpolation=None
-    # allows % in passwords.
-    _pw = s.get("webpassword", None)
-    if _pw is None or not _pw.strip():
-        cfg.webpassword = "admin"
-    else:
-        cfg.webpassword = _pw.strip("\r\n")
     try:
         cfg.session_ttl_min = int(s.get("session_ttl_min", cfg.session_ttl_min))
     except (TypeError, ValueError):
@@ -174,8 +156,6 @@ def load_config(path: str = "/etc/awg-panel/config.ini") -> PanelConfig:
     elif cfg.auth_lock_minutes > 1440:
         cfg.auth_lock_minutes = 1440
     users = _parse_users(cp)  # raises ValueError -> fail closed at startup
-    if users is None:
-        users = {cfg.webusername: cfg.webpassword}
     if len(users) > MAX_USERS:
         raise ValueError(f"config [users]: больше {MAX_USERS} пользователей")
     cfg.users = users

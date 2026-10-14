@@ -5,7 +5,7 @@
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
 ![Platform](https://img.shields.io/badge/platform-debian%20%7C%20ubuntu-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Version](https://img.shields.io/badge/version-0.1.11-blue)
+![Version](https://img.shields.io/badge/version-0.1.12-blue)
 
 Минималистичная веб-панель в стиле роутера поверх
 [bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer).
@@ -47,7 +47,8 @@
 | **Клиенты** | Таблица как `manage list --verbose`: имя, IP, префикс ключа, статус, RX/TX (`stats --json`), срок. Чекбоксы, массовое удаление, добавление нескольких имён разом. |
 | **Карточка клиента** | Блоки сверху вниз: **Пир → Конфиг → vpn:// → QR**. Кнопки: Пересоздать, Скачать `.conf`, `QR.png` (в новой вкладке), Скопировать для Конфига и `vpn://`. |
 | **Сроки** | При добавлении — только днями (`1..3650`, пусто = бессрочно). Чистку истёкших делает крон инсталлера. |
-| **Авторизация** | До 254 пользователей, логин/пароль из `config.ini` (`[users]` `user.N/password.N`; fallback — один `webusername/webpassword`). Сессии в памяти (sliding TTL + абсолютный лимит 12 ч, в сессии хранится имя), журнал входов в файл. Блок входа — средствами сервиса (`auth_max_attempts/auth_lock_minutes`, без `iptables`). Без 2FA/API — осознанно, см. [SECURITY.md](SECURITY.md). |
+| **Авторизация** | До 254 пользователей, логин/пароль только из `config.ini` (`[users]` `user.N/password.N`, секция обязательна). Сессии в памяти (sliding TTL + абсолютный лимит 12 ч, в сессии хранится имя), журнал входов в файл. Блок входа — средствами сервиса (`auth_max_attempts/auth_lock_minutes`, без `iptables`). Без 2FA/API — осознанно, см. [SECURITY.md](SECURITY.md). |
+| **HTTP→HTTPS** | `http://<IP>/` отвечает только `301 → https://<IP>:<port>/` (`http_redirect_port`, дефолт `80`, `0` — выкл). Контент по HTTP не отдаётся. |
 | **Стек** | Только Python 3 stdlib (`http.server` + встроенный HTTPS). Чистый SSR — формы работают без JS. Единственный JS — same-origin `/static/copy.js` для кнопок «Скопировать». Без nginx, без CDN. |
 
 Что панель **не делает** (и не будет без обсуждения в Issues):
@@ -77,16 +78,17 @@
 На сервере, где уже стоит `amneziawg-installer`:
 
 ```bash
-# 1. Скачать .deb из Releases (например v0.1.11)
-wget https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases/download/v0.1.11/awg-panel_0.1.11_all.deb
+# 1. Скачать .deb из Releases (например v0.1.12)
+wget https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases/download/v0.1.12/awg-panel_0.1.12_all.deb
 
 # 2. Установить (именно dpkg — без предупреждения _apt о песочнице)
-sudo dpkg -i awg-panel_0.1.11_all.deb
+sudo dpkg -i awg-panel_0.1.12_all.deb
 
 # 3. Сменить пароль и открыть панель
 sudo awg-panel-set-password
 sudo systemctl restart awg-panel
 # открыть https://<IP-сервера>:8443/ (self-signed — подтвердить исключение)
+# или http://<IP-сервера>/ — редирект 301 на https (нужен открытый 80/tcp)
 ```
 
 Проверка:
@@ -108,6 +110,7 @@ sudo journalctl -u awg-panel -n 30 --no-pager
   - `/etc/amnezia/amneziawg/awg0.conf`,
   - `/root/awg/awgsetup_cfg.init` (маркеры `AWG_PROTOCOL`, `SCRIPT_VERSION`).
 - **Зависимости .deb:** `python3`, `openssl`, `systemd`. Опционально `qrencode` (QR инсталлер генерит сам, панель только отдаёт `.png`).
+- **Порты:** `8443/tcp` (HTTPS) + `80/tcp` (редирект на HTTPS; выключается `http_redirect_port = 0`).
 - **Для сборки .deb:** `dpkg-deb`. Для dev-проверок: `python3` (тесты — только stdlib, без pip).
 
 ---
@@ -122,7 +125,7 @@ sudo dpkg -i awg-panel_*_all.deb
 - После установки `postinst` печатает памятку «что дальше» (пароль → URL → проверки).
 - Про безвредное предупреждение `N: Загрузка выполняется от лица суперпользователя...` и про восстановление `sudo` после битого `0.1.1` — см. [docs/INSTALL.md](docs/INSTALL.md) и [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
-Обновление — тем же `dpkg -i` новым `.deb` поверх. Конфиг `/etc/awg-panel/config.ini` сохраняется (conffile), недостающие `webusername/webpassword` дописывает `postinst`; остальное подхватывается дефолтами в коде.
+Обновление — тем же `dpkg -i` новым `.deb` поверх. Конфиг `/etc/awg-panel/config.ini` сохраняется (conffile); остальное подхватывается дефолтами в коде.
 
 Удаление:
 
@@ -143,8 +146,7 @@ sudo apt purge awg-panel        # удалить всё: конфиг, ключ�
 | `port` | `8443` | Порт HTTPS. `1..65535`. |
 | `http_redirect_port` | `80` | `http://:80 → https://:port` (`301`, только редирект). `0` = выкл. |
 | `cert` / `key` | `/etc/awg-panel/cert.pem` / `key.pem` | Self-signed создаёт `postinst` (`key.pem` — `600`). |
-| `webusername` / `webpassword` | `admin` / `admin` | Legacy (fallback без `[users]`). `%` разрешён, пробелы в пароле значимы. |
-| `[users]` `user.N` / `password.N` | — | До 254 пользователей (`N=1..254`), важнее legacy. Ошибки — отказ старта. |
+| `[users]` `user.N` / `password.N` | — | До 254 пользователей (`N=1..254`), секция обязательна. Ошибки — отказ старта. |
 | `auth_max_attempts` / `auth_lock_minutes` | `5` / `5` | Блок IP средствами сервиса (`1..100` / `1..1440`), без `iptables/ufw`. |
 | `session_ttl_min` | `30` | Sliding TTL сессии, `1..1440`. Абсолютный лимит — 12 ч (в коде). |
 | `manage_script` | `/root/awg/manage_amneziawg.sh` | Путь к underlay-скрипту. |
@@ -222,7 +224,7 @@ sudo systemctl restart awg-panel     # применить
 - **Underlay-контракт:** `list / stats / check / add / remove / regen` через `manage --json`. Панель не парсит `wg show` сама.
 - **Helper с allowlist:** `client-conf | client-uri | client-qr <name> | server-pubkeys | init-info`. Пути захардкожены, symlink отклоняются, `PATH` зажат, серверный `PrivateKey` не отдаётся никогда.
 - **Параллелизм с таймаутом:** `list + stats + helper` идут через `ThreadPoolExecutor` с общим `FUT_TIMEOUT=40с`.
-- **Fail-closed:** битый `config.ini` без секций → дефолты, а не падение; но дубли опций и любые ошибки `[users]` — отказ старта (с логом в stderr сервиса); ошибки `manage` в UI обобщены, детали — в stderr сервиса.
+- **Fail-closed:** нет файла, битый файл, нет `[users]` или любая ошибка `[users]` — отказ старта (с логом в stderr сервиса); ошибки `manage` в UI обобщены, детали — в stderr сервиса.
 
 ---
 
@@ -233,11 +235,11 @@ awg-control-pan/
 ├── src/awg_panel/
 │   ├── __init__.py      # версия (__version__)
 │   ├── __main__.py      # точка входа (python3 -m awg_panel)
-│   ├── server.py        # роуты, сессии, HTML, /static/style.css + /static/copy.js
+│   ├── server.py        # роуты, сессии, HTML, HTTP→HTTPS редиректор, /static/style.css + /static/copy.js
 │   ├── manage.py        # обёртка manage --json (без shell, капы stdout/батча)
 │   ├── system_info.py   # /proc: cpu/mem/disk/uptime/load/net
-│   ├── auth.py          # до 254 пользователей, сессии в памяти, rate-limit, журнал
-│   ├── config.py        # load_config() с clamp и fail-safe дефолтами
+│   ├── auth.py          # пользователи [users], сессии в памяти, rate-limit, журнал
+│   ├── config.py        # load_config() с clamp и fail-closed для [users]
 │   └── validate.py      # имена, expires, parse_names
 ├── bin/
 │   ├── awg-panel-helper        # безопасные чтения live-файлов (bash, allowlist)
@@ -246,8 +248,8 @@ awg-control-pan/
 │   ├── DEBIAN/control, conffiles, postinst, prerm, postrm
 │   ├── awg-panel.service        # systemd-юнит (User=root, см. SECURITY.md почему)
 │   ├── config.ini.example
-│   └── sudoers                  # legacy для старых установок (сервис sudo не использует)
-├── tests/test_panel.py  # unittest, только stdlib (40 тестов на 0.1.11)
+│   └── sudoers                  # для non-root/dev вызовов (в проде сервис от root, sudo не используется)
+├── tests/test_panel.py  # unittest, только stdlib (43 теста на 0.1.12)
 ├── build_deb.sh         # сборка .deb (root-owned, без pycache)
 ├── docs/                # INSTALL, CONFIGURATION, TROUBLESHOOTING, DEVELOPMENT (SECURITY.md — в корне)
 ├── .github/workflows/
@@ -283,14 +285,14 @@ awg-control-pan/
 # тесты (только stdlib, без pip/venv)
 python3 -m unittest discover -s tests -v
 
-# 40/40 OK на 0.1.11. Полный e2e — только на VPS с инсталлером
+# 43/43 OK на 0.1.12. Полный e2e — только на VPS с инсталлером
 # (нужны /root/awg/manage_amneziawg.sh и /etc/amnezia/.../awg0.conf)
 ```
 
 ```bash
 # локальная сборка .deb (нужен dpkg-deb; на Windows — в WSL)
-./build_deb.sh 0.1.11
-# → dist/awg-panel_0.1.11_all.deb
+./build_deb.sh 0.1.12
+# → dist/awg-panel_0.1.12_all.deb
 ```
 
 Детали кодстайла, тестов, релизного цикла — [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) и [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -333,7 +335,7 @@ cat /var/log/awg-panel/auth.log
 `manage` сам требует root (wg/iptables/конфиги). Прослойка `awgpanel+sudo` не добавляла безопасности, но ломалась о systemd-песочницу. Компромисс зафиксирован: минимальный юнит (`PrivateTmp` only), вызовы без shell, allowlist helper, капы и таймауты. Разбор — [SECURITY.md](SECURITY.md#почему-сервис-работает-от-root).
 
 **Будут ли 2FA / API / WireGuard-manager?**
-Пока нет. Мульти-пользователи панели есть с `0.1.10` (`[users]` до 254). Хотите 2FA/API — откройте Issue с use-case.
+Пока нет. Пользователи панели задаются в `[users]` (до 254, секция обязательна). Хотите 2FA/API — откройте Issue с use-case.
 
 ---
 
@@ -341,13 +343,13 @@ cat /var/log/awg-panel/auth.log
 
 - Кратко: [CHANGELOG.md](CHANGELOG.md).
 - Файлы: [GitHub Releases](https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases) (`.deb` прикладывает CI по тегу `v*`).
-- Старые неработоспособные релизы до `0.1.8` удалены; git-теги `v0.1.1–v0.1.11` оставлены (при нужде `.deb` пересоберёт CI).
+- Старые неработоспособные релизы до `0.1.8` удалены; git-теги `v0.1.1–v0.1.12` оставлены (при нужде `.deb` пересоберёт CI).
 
 ---
 
 ## Участие в разработке
 
-PR приветствуются. Прочитайте [CONTRIBUTING.md](CONTRIBUTING.md): CRLF запрещён (`.gitattributes` держит LF для `postinst/helper/*.py`), тесты обязательны (`40/40`), коммиты — короткие imperative на английском или русском.
+PR приветствуются. Прочитайте [CONTRIBUTING.md](CONTRIBUTING.md): CRLF запрещён (`.gitattributes` держит LF для `postinst/helper/*.py`), тесты обязательны (`43/43`), коммиты — короткие imperative на английском или русском.
 
 ---
 
