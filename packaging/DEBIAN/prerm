@@ -6,8 +6,8 @@ case "$1" in
     ;;
   purge)
     rm -rf /var/lib/awg-panel
-    # config/password/certs stay unless purge explicitly wants removal;
-    # dpkg handles conffiles. Nothing in /root/awg touched ever.
+    # /etc/awg-panel (config/keys) and /var/log/awg-panel are cleaned in
+    # postrm purge; dpkg handles conffiles. Nothing in /root/awg touched ever.
     ;;
 esac
 exit 0

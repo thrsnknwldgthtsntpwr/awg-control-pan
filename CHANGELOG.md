@@ -1,7 +1,18 @@
 # Changelog
 
 Формат: `## [версия] - дата` + списки `Added / Fixed / Changed / Security`.
-Теги: `v0.1.1`–`v0.1.10`. Релизы `.deb` на GitHub — с `0.1.8` (старые удалены, теги оставлены).
+Теги: `v0.1.1`–`v0.1.11`. Релизы `.deb` на GitHub — с `0.1.8` (старые удалены, теги оставлены).
+
+## [0.1.11] - 2026-10-14
+
+### Fixed
+
+- `apt purge` теперь чистит всё: `postrm purge` удаляет `cert.pem`/`key.pem` (их создаёт `postinst`, dpkg бы их оставил), `config.ini`, пустой `/etc/awg-panel` и `/var/log/awg-panel`. `remove` по-прежнему оставляет конфиг и логи. `/root/awg` и `/etc/amnezia` не трогаются никогда.
+- README приведён к релизу: актуальные конфиг (`[users]`, лимиты), fail-closed поведение, purge, тесты 40/40, FAQ без «один админ».
+
+### Added
+
+- Регресс-тест `test_postrm_purge_full_cleanup`.
 
 ## [0.1.10] - 2026-10-14
 

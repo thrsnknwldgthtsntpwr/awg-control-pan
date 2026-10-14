@@ -5,7 +5,7 @@
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
 ![Platform](https://img.shields.io/badge/platform-debian%20%7C%20ubuntu-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Version](https://img.shields.io/badge/version-0.1.10-blue)
+![Version](https://img.shields.io/badge/version-0.1.11-blue)
 
 Минималистичная веб-панель в стиле роутера поверх
 [bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer).
@@ -77,11 +77,11 @@
 На сервере, где уже стоит `amneziawg-installer`:
 
 ```bash
-# 1. Скачать .deb из Releases (например v0.1.10)
-wget https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases/download/v0.1.10/awg-panel_0.1.10_all.deb
+# 1. Скачать .deb из Releases (например v0.1.11)
+wget https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases/download/v0.1.11/awg-panel_0.1.11_all.deb
 
 # 2. Установить (именно dpkg — без предупреждения _apt о песочнице)
-sudo dpkg -i awg-panel_0.1.10_all.deb
+sudo dpkg -i awg-panel_0.1.11_all.deb
 
 # 3. Сменить пароль и открыть панель
 sudo awg-panel-set-password
@@ -122,13 +122,13 @@ sudo dpkg -i awg-panel_*_all.deb
 - После установки `postinst` печатает памятку «что дальше» (пароль → URL → проверки).
 - Про безвредное предупреждение `N: Загрузка выполняется от лица суперпользователя...` и про восстановление `sudo` после битого `0.1.1` — см. [docs/INSTALL.md](docs/INSTALL.md) и [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
-Обновление — тем же `dpkg -i` новым `.deb` поверх. Конфиг `/etc/awg-panel/config.ini` сохраняется (conffile), недостающие ключи дописываются дефолтами.
+Обновление — тем же `dpkg -i` новым `.deb` поверх. Конфиг `/etc/awg-panel/config.ini` сохраняется (conffile), недостающие `webusername/webpassword` дописывает `postinst`; остальное подхватывается дефолтами в коде.
 
 Удаление:
 
 ```bash
-sudo apt remove awg-panel       # конфиг и логи остаются
-sudo apt purge awg-panel        # удалить всё включая конфиг
+sudo apt remove awg-panel       # конфиг, ключи и логи остаются
+sudo apt purge awg-panel        # удалить всё: конфиг, ключи, логи (VPN-клиенты инсталлера не трогает)
 ```
 
 ---
@@ -137,7 +137,7 @@ sudo apt purge awg-panel        # удалить всё включая конф�
 
 Единственный конфиг: `/etc/awg-panel/config.ini` (`600`, `root:root`). Полный справочник — [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
-| Ключ (`[server]`) | Дефолт | Что значит |
+| Ключ | Дефолт | Что значит |
 |-------------------|--------|------------|
 | `host` | `0.0.0.0` | На каком адресе слушать. |
 | `port` | `8443` | Порт HTTPS. `1..65535`. |
@@ -201,7 +201,7 @@ sudo systemctl restart awg-panel     # применить
                     HTTPS :8443 (self-signed)
   ┌──────────┐   ─────────────────────────▶   ┌─────────────────────┐
   │ Браузер  │   SSR-формы + 1 same-origin    │  awg-panel (root)   │
-  │ (admin)  │   JS (/static/copy.js)         │  stdlib http.server │
+  │ (users)  │   JS (/static/copy.js)         │  stdlib http.server │
   └──────────┘   ◀─────────────────────────   └─────────┬───────────┘
                                                        │ argv, без shell
                                         ┌──────────────┼──────────────┐
@@ -221,7 +221,7 @@ sudo systemctl restart awg-panel     # применить
 - **Underlay-контракт:** `list / stats / check / add / remove / regen` через `manage --json`. Панель не парсит `wg show` сама.
 - **Helper с allowlist:** `client-conf | client-uri | client-qr <name> | server-pubkeys | init-info`. Пути захардкожены, symlink отклоняются, `PATH` зажат, серверный `PrivateKey` не отдаётся никогда.
 - **Параллелизм с таймаутом:** `list + stats + helper` идут через `ThreadPoolExecutor` с общим `FUT_TIMEOUT=40с`.
-- **Fail-closed:** битый `config.ini` → дефолты, а не падение; ошибки `manage` в UI обобщены, детали — в stderr сервиса.
+- **Fail-closed:** битый `config.ini` без секций → дефолты, а не падение; но дубли опций и любые ошибки `[users]` — отказ старта (с логом в stderr сервиса); ошибки `manage` в UI обобщены, детали — в stderr сервиса.
 
 ---
 
@@ -246,9 +246,9 @@ awg-control-pan/
 │   ├── awg-panel.service        # systemd-юнит (User=root, см. SECURITY.md почему)
 │   ├── config.ini.example
 │   └── sudoers                  # legacy для старых установок (сервис sudo не использует)
-├── tests/test_panel.py  # unittest, только stdlib (30 тестов на 0.1.9)
+├── tests/test_panel.py  # unittest, только stdlib (40 тестов на 0.1.11)
 ├── build_deb.sh         # сборка .deb (root-owned, без pycache)
-├── docs/                # INSTALL, CONFIGURATION, SECURITY, TROUBLESHOOTING, DEVELOPMENT
+├── docs/                # INSTALL, CONFIGURATION, TROUBLESHOOTING, DEVELOPMENT (SECURITY.md — в корне)
 ├── .github/workflows/
 │   ├── build-deb.yml    # сборка .deb + Release по тегу v*
 │   └── ci.yml           # py_compile + unittest + bash -n + visudo на push/PR
@@ -264,7 +264,7 @@ awg-control-pan/
 
 Честная сводка (полная — [SECURITY.md](SECURITY.md)):
 
-- Приватный ключ сервера **никогда** не отдаётся в браузер; `awg show dump` целиком не показываем (там PSK); приватные ключи клиентов видит админ — как root через `manage`.
+- Приватный ключ сервера **никогда** не отдаётся в браузер; `awg show dump` целиком не показываем (там PSK); приватные ключи клиентов видят пользователи панели — как root через `manage`.
 - Все POST с CSRF (constant-time), редиректы `303`, кука `Secure; HttpOnly; SameSite=Lax`, rate-limit логина (`auth_max_attempts/auth_lock_minutes`, дефолт `5/5мин`) по socket-IP средствами сервиса без `iptables` (`X-Forwarded-For` игнорируется).
 - Заголовки: `nosniff / DENY / no-referrer / CSP default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' / HSTS / Permissions-Policy`.
 - Лимиты: тело форм 1 МиБ (`413` + разрыв keep-alive), max 2000 полей, max 100 имён в батче, stdout manage 1 МиБ, helper 2 МиБ, socket timeout 10 с.
@@ -282,14 +282,14 @@ awg-control-pan/
 # тесты (только stdlib, без pip/venv)
 python3 -m unittest discover -s tests -v
 
-# 39/39 OK на 0.1.10. Полный e2e — только на VPS с инсталлером
+# 40/40 OK на 0.1.11. Полный e2e — только на VPS с инсталлером
 # (нужны /root/awg/manage_amneziawg.sh и /etc/amnezia/.../awg0.conf)
 ```
 
 ```bash
 # локальная сборка .deb (нужен dpkg-deb; на Windows — в WSL)
-./build_deb.sh 0.1.10
-# → dist/awg-panel_0.1.10_all.deb
+./build_deb.sh 0.1.11
+# → dist/awg-panel_0.1.11_all.deb
 ```
 
 Детали кодстайла, тестов, релизного цикла — [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) и [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -331,8 +331,8 @@ cat /var/log/awg-panel/auth.log
 **Зачем сервис от root, это не опасно?**
 `manage` сам требует root (wg/iptables/конфиги). Прослойка `awgpanel+sudo` не добавляла безопасности, но ломалась о systemd-песочницу. Компромисс зафиксирован: минимальный юнит (`PrivateTmp` only), вызовы без shell, allowlist helper, капы и таймауты. Разбор — [SECURITY.md](SECURITY.md#почему-сервис-работает-от-root).
 
-**Будут ли multi-user / 2FA / API / WireGuard-manager?**
-Пока нет. Один админ — осознанное упрощение для личного сервера. Хотите — откройте Issue с use-case.
+**Будут ли 2FA / API / WireGuard-manager?**
+Пока нет. Мульти-пользователи панели есть с `0.1.10` (`[users]` до 254). Хотите 2FA/API — откройте Issue с use-case.
 
 ---
 
@@ -340,13 +340,13 @@ cat /var/log/awg-panel/auth.log
 
 - Кратко: [CHANGELOG.md](CHANGELOG.md).
 - Файлы: [GitHub Releases](https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases) (`.deb` прикладывает CI по тегу `v*`).
-- Старые неработоспособные релизы до `0.1.8` удалены; git-теги `v0.1.1–v0.1.10` оставлены (при нужде `.deb` пересоберёт CI).
+- Старые неработоспособные релизы до `0.1.8` удалены; git-теги `v0.1.1–v0.1.11` оставлены (при нужде `.deb` пересоберёт CI).
 
 ---
 
 ## Участие в разработке
 
-PR приветствуются. Прочитайте [CONTRIBUTING.md](CONTRIBUTING.md): CRLF запрещён (`.gitattributes` держит LF для `postinst/helper/*.py`), тесты обязательны (`39/39`), коммиты — короткие imperative на английском или русском.
+PR приветствуются. Прочитайте [CONTRIBUTING.md](CONTRIBUTING.md): CRLF запрещён (`.gitattributes` держит LF для `postinst/helper/*.py`), тесты обязательны (`40/40`), коммиты — короткие imperative на английском или русском.
 
 ---
 

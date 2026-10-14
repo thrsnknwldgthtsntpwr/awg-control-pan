@@ -369,6 +369,23 @@ class TestPackaging(unittest.TestCase):
         self.assertIn("webpassword = admin", postinst)
         self.assertIn("chmod 600 /etc/awg-panel/config.ini", postinst)
 
+    def test_postrm_purge_full_cleanup(self):
+        # 0.1.11: purge must remove what dpkg leaves behind — postinst-made
+        # cert/key (not conffiles) and logs. /root/awg must never be touched.
+        postrm = (Path(__file__).resolve().parents[1] / "packaging" / "DEBIAN" / "postrm").read_text()
+        self.assertIn("purge)", postrm)
+        for marker in (
+            "rm -f /etc/awg-panel/cert.pem",
+            "/etc/awg-panel/key.pem",
+            "/etc/awg-panel/config.ini",
+            "rm -rf /var/log/awg-panel",
+        ):
+            self.assertIn(marker, postrm)
+        # Only real commands count — the comment names the protected paths.
+        code = "\n".join(l for l in postrm.splitlines() if l.strip() and not l.strip().startswith("#"))
+        self.assertNotIn("/root/awg", code)
+        self.assertNotIn("/etc/amnezia", code)
+
     def test_service_runs_as_root_without_sudo_breaking_sandbox(self):
         # Regression 0.1.3: User=awgpanel + CapabilityBoundingSet=(empty) +
         # ProtectSystem=strict + ReadOnlyPaths broke sudo:

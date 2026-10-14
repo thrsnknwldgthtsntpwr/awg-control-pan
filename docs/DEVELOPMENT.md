@@ -55,8 +55,8 @@ sudo visudo -c -f packaging/sudoers
 ## Сборка .deb
 
 ```bash
-./build_deb.sh 0.1.10
-# → dist/awg-panel_0.1.10_all.deb (dist/ — в .gitignore)
+./build_deb.sh 0.1.11
+# → dist/awg-panel_0.1.11_all.deb (dist/ — в .gitignore)
 ```
 
 Что делает скрипт:

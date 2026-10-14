@@ -66,8 +66,8 @@ sudo dpkg -i awg-panel_<новая-версия>_all.deb
 ## 5. Удаление
 
 ```bash
-sudo apt remove awg-panel   # бинарники и юнит удалены, конфиг и логи остаются
-sudo apt purge awg-panel    # + удаляет /etc/awg-panel
+sudo apt remove awg-panel   # бинарники и юнит удалены, конфиг, ключи и логи остаются
+sudo apt purge awg-panel    # + удаляет /etc/awg-panel (конфиг, ключи) и /var/log/awg-panel
 ```
 
 Клиенты VPN при этом **не удаляются** — они живут в инсталлере.
