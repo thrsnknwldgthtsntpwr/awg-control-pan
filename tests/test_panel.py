@@ -220,6 +220,59 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg4.auth_lock_minutes, 5)
 
 
+class TestClientNames(unittest.TestCase):
+    def _load(self, body: str):
+        import tempfile
+        from awg_panel.config import load_config
+        users = "[users]\nuser.1 = admin\npassword.1 = admin\n"
+        with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
+            f.write(body + users)
+            path = f.name
+        return load_config(path)
+
+    def test_defaults_without_section(self):
+        cfg = self._load("[server]\nport = 8443\n")
+        self.assertEqual(cfg.client_name_prefix, "user_")
+        self.assertEqual(cfg.client_name_rand_bytes, 8)
+
+    def test_custom(self):
+        cfg = self._load("[server]\n[client_names]\nprefix = vpn-\nrand_bytes = 9\n")
+        self.assertEqual(cfg.client_name_prefix, "vpn-")
+        self.assertEqual(cfg.client_name_rand_bytes, 9)
+
+    def test_garbage_and_clamp(self):
+        cfg = self._load("[server]\n[client_names]\nprefix = \nrand_bytes = garbage\n")
+        self.assertEqual(cfg.client_name_prefix, "user_")
+        self.assertEqual(cfg.client_name_rand_bytes, 8)
+        self.assertEqual(self._load("[server]\n[client_names]\nrand_bytes = 0\n").client_name_rand_bytes, 1)
+        # 999 -> clamp 32, затем урезка под длину имени (<= 63):
+        # префикс user_ (5) -> (63-5)//2 = 29, префикс из 1 символа -> 31.
+        self.assertEqual(self._load("[server]\n[client_names]\nrand_bytes = 999\n").client_name_rand_bytes, 29)
+        cfg5 = self._load("[server]\n[client_names]\nprefix = a\nrand_bytes = 999\n")
+        self.assertEqual(cfg5.client_name_rand_bytes, 31)
+
+    def test_bad_prefix_falls_back(self):
+        for bad in ("bad name!", "../x", "a" * 62):
+            with self.subTest(bad=bad):
+                cfg = self._load(f"[server]\n[client_names]\nprefix = {bad}\n")
+                self.assertEqual(cfg.client_name_prefix, "user_")
+
+    def test_long_prefix_shrinks_rand_bytes(self):
+        # префикс 32 символа -> не больше (63-32)//2 = 15 байт, иначе имя
+        # не пройдёт valid_client_name() (<= 63).
+        cfg = self._load("[server]\n[client_names]\nprefix = " + "p" * 32 + "\nrand_bytes = 32\n")
+        self.assertEqual(cfg.client_name_prefix, "p" * 32)
+        self.assertEqual(cfg.client_name_rand_bytes, 15)
+        self.assertLessEqual(len(cfg.client_name_prefix) + 2 * cfg.client_name_rand_bytes, 63)
+        self.assertTrue(valid_client_name(cfg.client_name_prefix + "f" * (2 * cfg.client_name_rand_bytes)))
+
+    def test_example_has_client_names(self):
+        example = (Path(__file__).resolve().parents[1] / "packaging" / "config.ini.example").read_text()
+        self.assertIn("[client_names]", example)
+        self.assertIn("prefix = user_", example)
+        self.assertIn("rand_bytes = 8", example)
+
+
 class TestManage(unittest.TestCase):
     def test_parse_ok_flag(self):
         from awg_panel.manage import _parse_json_output
@@ -548,6 +601,97 @@ class TestClientPage(unittest.TestCase):
         pre_rule = STYLE_CSS.split("pre{", 1)[1].split("}", 1)[0]
         self.assertIn("overflow:auto", pre_rule)
         self.assertIn("max-width:100%", pre_rule)
+
+
+class TestClientsListPage(unittest.TestCase):
+    def _render(self, prefix="user_", rand_bytes=8):
+        from types import SimpleNamespace
+        from unittest import mock
+        from awg_panel import server as srv
+        from awg_panel.config import PanelConfig
+        from awg_panel.manage import ManageResult
+        h = srv.Handler.__new__(srv.Handler)
+        cfg = PanelConfig()
+        cfg.client_name_prefix = prefix
+        cfg.client_name_rand_bytes = rand_bytes
+        h.cfg = cfg
+        clients = [{"name": "alice", "ip": "10.0.0.2", "status": "active",
+                    "status_code": "active", "expires_at": None}]
+        with mock.patch.object(srv.Handler, "_sess",
+                               lambda self: SimpleNamespace(csrf="t")), \
+             mock.patch.object(srv, "cmd_list", lambda ms: ManageResult(True, 0, clients, "")), \
+             mock.patch.object(srv, "cmd_stats", lambda ms: ManageResult(True, 0, [], "")), \
+             mock.patch.object(srv, "run_helper", lambda helper, *a, **k: (0, b"", "")):
+            return h._page_clients()
+
+    def test_delete_disabled_until_checked(self):
+        body = self._render()
+        # кнопка удаления неактивна без выбора и сабмитит форму с чекбоксами
+        self.assertIn('id=delbtn disabled', body)
+        self.assertIn('form=delf', body)
+        # JS включает/выключает её по чекбоксам (внешний файл, не инлайн)
+        self.assertNotIn("getRandomValues", body)
+        self.assertNotIn("<script>", body)
+        from awg_panel.server import CLIENTS_JS, CLIENTS_TAG
+        self.assertIn(CLIENTS_TAG, body)
+        self.assertIn("getElementById('delbtn')", CLIENTS_JS)
+        self.assertIn("b.disabled=!any", CLIENTS_JS)
+        self.assertIn("DOMContentLoaded", CLIENTS_JS)
+
+    def test_add_and_delete_single_row(self):
+        body = self._render()
+        i_add = body.index(">Добавить<")
+        i_del = body.index(">Удалить выбранные<")
+        self.assertLess(i_add, i_del)
+        # обе кнопки лежат в одном <div class=row>, форма #delf (таблица)
+        # идёт уже после него
+        row_start = body.rindex("<div class=row>", 0, i_add)
+        row_end = body.index("</div>", i_add)
+        self.assertLess(i_del, row_end)
+        self.assertIn("form=addf", body[row_start:row_end])
+        self.assertIn("form=delf", body[row_start:row_end])
+        self.assertIn("id=delf", body[row_end:])
+
+    def test_generate_button_and_data_attrs(self):
+        body = self._render(prefix="vpn-", rand_bytes=9)
+        self.assertIn(">Сгенерировать имя<", body)
+        self.assertIn("data-prefix='vpn-'", body)
+        self.assertIn("data-rand-bytes='9'", body)
+        self.assertIn("id=names", body)
+        from awg_panel.server import CLIENTS_JS
+        self.assertIn("getRandomValues", CLIENTS_JS)
+        self.assertIn("Math.random", CLIENTS_JS)
+        self.assertIn("data-prefix", CLIENTS_JS)
+
+    def test_clients_js_static_route(self):
+        # /static/clients.js должен отдаваться (200 + javascript) без авторизации,
+        # иначе CSP script-src 'self' оставит кнопки мёртвыми.
+        from io import BytesIO
+        from awg_panel import server as srv
+        h = srv.Handler.__new__(srv.Handler)
+        h.command = "GET"
+        h.path = "/static/clients.js"
+        h.wfile = BytesIO()
+        sent = {}
+
+        def send_response(code, msg=None):
+            sent["code"] = code
+
+        def send_header(k, v):
+            sent.setdefault("hdrs", []).append((k, v))
+
+        h.send_response = send_response
+        h.send_header = send_header
+        h.end_headers = lambda: sent.setdefault("ended", True)
+        h.do_GET()
+        self.assertEqual(sent.get("code"), 200)
+        hdrs = dict(sent.get("hdrs", []))
+        self.assertIn("javascript", hdrs.get("Content-Type", ""))
+        csp = hdrs.get("Content-Security-Policy", "")
+        self.assertIn("script-src 'self'", csp)
+        raw = h.wfile.getvalue()
+        self.assertIn(b"awgClients", raw)
+        self.assertEqual(raw.decode("utf-8"), srv.CLIENTS_JS)
 
 
 class TestHttpRedirect(unittest.TestCase):

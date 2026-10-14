@@ -10,9 +10,17 @@ _HOST_RE = re.compile(r"^[A-Za-z0-9.\-:]{1,253}$")
 _LOGIN_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,64}$")
 _USER_KEY_RE = re.compile(r"^user\.(\d+)$")
 _PASS_KEY_RE = re.compile(r"^password\.(\d+)$")
+_CLIENT_PREFIX_RE = re.compile(r"^[A-Za-z0-9_-]{1,61}$")
 
 # Hard cap on panel users: [users] user.N/password.N, N = 1..254.
 MAX_USERS = 254
+
+# Bounds for [client_names] rand_bytes: mirrors `openssl rand -hex N`
+# (N bytes -> 2*N hex chars appended to prefix).
+CLIENT_NAME_RAND_BYTES_MIN = 1
+CLIENT_NAME_RAND_BYTES_MAX = 32
+# Hard cap from validate.valid_client_name(): prefix + suffix <= 63 chars.
+CLIENT_NAME_MAX_LEN = 63
 
 
 @dataclass
@@ -36,6 +44,11 @@ class PanelConfig:
     # auth_max_attempts fails -> block IP for auth_lock_minutes.
     auth_max_attempts: int = 5
     auth_lock_minutes: int = 5
+    # Generated client names ([client_names], optional): prefix + hex suffix
+    # of 2*rand_bytes chars. Client-side JS reads these via data-attributes;
+    # the analogue of `user_$(openssl rand -hex N)`.
+    client_name_prefix: str = "user_"
+    client_name_rand_bytes: int = 8
 
 
 def _parse_users(cp: configparser.ConfigParser) -> dict:
@@ -155,8 +168,47 @@ def load_config(path: str = "/etc/awg-panel/config.ini") -> PanelConfig:
         cfg.auth_lock_minutes = 1
     elif cfg.auth_lock_minutes > 1440:
         cfg.auth_lock_minutes = 1440
+    _parse_client_names(cp, cfg)
     users = _parse_users(cp)  # raises ValueError -> fail closed at startup
     if len(users) > MAX_USERS:
         raise ValueError(f"config [users]: больше {MAX_USERS} пользователей")
     cfg.users = users
     return cfg
+
+
+def _parse_client_names(cp: configparser.ConfigParser, cfg: PanelConfig) -> None:
+    """Parse optional [client_names] section (never fails startup).
+
+    Unlike [users], bad values fall back to defaults: missing section keeps
+    prefix='user_' + rand_bytes=8, garbage/clamped ints are repaired, a bad
+    prefix falls back to 'user_'. The generated name must always satisfy
+    valid_client_name() (<= 63 chars), so rand_bytes is additionally capped
+    by the prefix length.
+    """
+    try:
+        cn = cp["client_names"] if "client_names" in cp else {}
+    except configparser.Error:
+        return
+    try:
+        raw_prefix = cn.get("prefix", cfg.client_name_prefix)
+    except configparser.Error:
+        raw_prefix = cfg.client_name_prefix
+    prefix = (raw_prefix or "").strip() or "user_"
+    if not _CLIENT_PREFIX_RE.match(prefix):
+        prefix = "user_"
+    try:
+        rand_bytes = int(cn.get("rand_bytes", cfg.client_name_rand_bytes))
+    except (TypeError, ValueError, configparser.Error):
+        rand_bytes = 8
+    if rand_bytes < CLIENT_NAME_RAND_BYTES_MIN:
+        rand_bytes = CLIENT_NAME_RAND_BYTES_MIN
+    elif rand_bytes > CLIENT_NAME_RAND_BYTES_MAX:
+        rand_bytes = CLIENT_NAME_RAND_BYTES_MAX
+    max_bytes = (CLIENT_NAME_MAX_LEN - len(prefix)) // 2
+    if max_bytes < CLIENT_NAME_RAND_BYTES_MIN:
+        prefix = "user_"
+        max_bytes = (CLIENT_NAME_MAX_LEN - len(prefix)) // 2
+    if rand_bytes > max_bytes:
+        rand_bytes = max_bytes
+    cfg.client_name_prefix = prefix
+    cfg.client_name_rand_bytes = rand_bytes

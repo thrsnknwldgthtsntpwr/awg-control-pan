@@ -20,6 +20,15 @@ helper = /usr/sbin/awg-panel-helper
 auth_log = /var/log/awg-panel/auth.log
 session_ttl_min = 30
 
+[client_names]
+# Кнопка «Сгенерировать имя» на странице «Клиенты»: подставляет
+# prefix + случайный hex из 2*rand_bytes символов
+# (аналог user_$(openssl rand -hex N): rand_bytes=8 -> user_fb4c14c49c3e2483).
+# prefix: [A-Za-z0-9_-], итоговая длина prefix + 2*rand_bytes <= 63.
+# rand_bytes: 1..32 (вне диапазона -> clamp, мусор -> 8).
+# prefix = user_
+# rand_bytes = 8
+
 [users]
 # Пользователи панели: пары user.N/password.N, N=1..254, max 254.
 # Любая ошибка (дубль логина, password.N без user.N, пустой пароль,

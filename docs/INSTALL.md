@@ -18,10 +18,10 @@
 
 ```bash
 # Скачать нужный релиз со страницы Releases
-wget https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases/download/v0.1.9/awg-panel_0.1.9_all.deb
+wget https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases/download/v0.1.13/awg-panel_0.1.13_all.deb
 
 # Рекомендуется именно dpkg:
-sudo dpkg -i awg-panel_0.1.10_all.deb
+sudo dpkg -i awg-panel_0.1.13_all.deb
 ```
 
 `postinst` делает только своё:
@@ -38,7 +38,7 @@ sudo dpkg -i awg-panel_0.1.10_all.deb
 ## 3. Что дальше
 
 ```bash
-# 1. Сменить дефолтный admin/admin
+# 1. Сменить пароль из примера (user.1/admin в config.ini.example)
 sudo awg-panel-set-password
 # или вручную: правка /etc/awg-panel/config.ini → [users] user.1/password.1
 
@@ -97,8 +97,8 @@ cp awg-panel_*_all.deb /tmp/ && sudo apt install /tmp/awg-panel_*_all.deb
 ```bash
 git clone https://github.com/thrsnknwldgthtsntpwr/awg-control-pan.git
 cd awg-control-pan
-./build_deb.sh 0.1.9
-# → dist/awg-panel_0.1.9_all.deb
+./build_deb.sh 0.1.13
+# → dist/awg-panel_0.1.13_all.deb
 ```
 
 Требуется `dpkg-deb`. На Windows — собирать в WSL (на `/mnt/d` с правами `777` собирайте через `/tmp`, см. DEVELOPMENT).

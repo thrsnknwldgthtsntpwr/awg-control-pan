@@ -46,35 +46,11 @@ cat /root/awg/awgsetup_cfg.init
 
 ## TLS load failed / сервис в restart-loop
 
-Актуально для версий `≤0.1.3`. Починено в `0.1.4`:
-
-- сервис работает от `root`, `key.pem` — `600 root:root`, `postinst` лечит права при каждом upgrade.
-
-Лечение: обновитесь до актуальной версии тем же `dpkg -i`.
-
-```bash
-sudo journalctl -u awg-panel -n 20 --no-pager
-# было: TLS load failed (...key.pem): Permission denied
-```
+Было в `≤0.1.3`, починено в `0.1.4` (сервис от root, `key.pem 600 root:root` + self-heal). Лечение: обновиться до актуальной версии.
 
 ## sudo сломан после 0.1.1 (is owned by uid 1001)
 
-Выпуск `0.1.1` привёз `/etc/sudoers.d/awg-panel` с владельцем не-root — такой файл ломает **весь** `sudo`:
-
-```text
-sudo: /etc/sudoers.d/awg-panel is owned by uid 1001, should be 0
-```
-
-Чинить как root (через консоль хостера / `su -` / `pkexec`, сам `sudo` не работает):
-
-```bash
-su -
-chown root:root /etc/sudoers.d/awg-panel
-chmod 440 /etc/sudoers.d/awg-panel
-visudo -c
-```
-
-После этого ставьте `≥0.1.2`: сборка идёт с `--root-owner-group`, а `postinst` сам чинит владельца/права при каждом upgrade.
+Было в `0.1.1` (не-root владелец `/etc/sudoers.d/awg-panel` ломал весь sudo). Чинилось вручную `chown root:root + chmod 440 + visudo -c`, с `≥0.1.2` сборка root-owned и self-heal в `postinst`. Версии `≤0.1.7` не поддерживаются — обновитесь.
 
 ## Не пускает в панель / 429
 

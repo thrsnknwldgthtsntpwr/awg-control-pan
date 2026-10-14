@@ -5,7 +5,7 @@
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
 ![Platform](https://img.shields.io/badge/platform-debian%20%7C%20ubuntu-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Version](https://img.shields.io/badge/version-0.1.12-blue)
+![Version](https://img.shields.io/badge/version-0.1.13-blue)
 
 Минималистичная веб-панель в стиле роутера поверх
 [bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer).
@@ -44,12 +44,12 @@
 |--------|-----------|
 | **Статус → Сервер** | Uptime, load average, CPU, RAM, диск `/`, счётчики интерфейсов из `/proc`. Без вызова `manage`. |
 | **Статус → AWG** | `manage check --json` + маркеры `AWG_PROTOCOL` / `SCRIPT_VERSION`: юнит, интерфейс `awg0`, порт, модуль, число пиров, UFW (только чтение). |
-| **Клиенты** | Таблица как `manage list --verbose`: имя, IP, префикс ключа, статус, RX/TX (`stats --json`), срок. Чекбоксы, массовое удаление, добавление нескольких имён разом. |
+| **Клиенты** | Таблица как `manage list --verbose`: имя, IP, префикс ключа, статус, RX/TX (`stats --json`), срок. Чекбоксы, массовое удаление (кнопка неактивна без выбора), добавление нескольких имён разом, генератор имён (`[client_names]`). Кнопки «Добавить» и «Удалить выбранные» в одном ряду. |
 | **Карточка клиента** | Блоки сверху вниз: **Пир → Конфиг → vpn:// → QR**. Кнопки: Пересоздать, Скачать `.conf`, `QR.png` (в новой вкладке), Скопировать для Конфига и `vpn://`. |
 | **Сроки** | При добавлении — только днями (`1..3650`, пусто = бессрочно). Чистку истёкших делает крон инсталлера. |
 | **Авторизация** | До 254 пользователей, логин/пароль только из `config.ini` (`[users]` `user.N/password.N`, секция обязательна). Сессии в памяти (sliding TTL + абсолютный лимит 12 ч, в сессии хранится имя), журнал входов в файл. Блок входа — средствами сервиса (`auth_max_attempts/auth_lock_minutes`, без `iptables`). Без 2FA/API — осознанно, см. [SECURITY.md](SECURITY.md). |
 | **HTTP→HTTPS** | `http://<IP>/` отвечает только `301 → https://<IP>:<port>/` (`http_redirect_port`, дефолт `80`, `0` — выкл). Контент по HTTP не отдаётся. |
-| **Стек** | Только Python 3 stdlib (`http.server` + встроенный HTTPS). Чистый SSR — формы работают без JS. Единственный JS — same-origin `/static/copy.js` для кнопок «Скопировать». Без nginx, без CDN. |
+| **Стек** | Только Python 3 stdlib (`http.server` + встроенный HTTPS). SSR: добавление работает без JS. JS только same-origin: `/static/copy.js` (кнопки «Скопировать») и `/static/clients.js` (активация «Удалить выбранные» по чекбоксам + генератор имён). Без nginx, без CDN. |
 
 Что панель **не делает** (и не будет без обсуждения в Issues):
 
@@ -66,7 +66,7 @@
 
 - `/status?tab=server` — две карточки: «Система» и «Интерфейсы» + последние 10 строк журнала входов.
 - `/status?tab=awg` — одна карточка «AWG» с таблицей из 8 строк (юнит, интерфейс, порт, модуль, пиры, UFW, поколение, версия установщика).
-- `/clients` — форма добавления (`имена через пробел/запятую` + `дней`), таблица, кнопка «Удалить выбранные». Имя — ссылка в карточку.
+- `/clients` — форма добавления (`имена через пробел/запятую` + `дней` + «Сгенерировать имя»), ряд «Добавить» / «Удалить выбранные» (удаление неактивно без выбора), таблица. Имя — ссылка в карточку.
 - `/client?name=alice` — карточка клиента (Пир / Конфиг / `vpn://` / QR).
 
 Скриншоты пока не приложены — панель ставится за 2 минуты на тестовый VPS, см. [Быстрый старт](#быстрый-старт).
@@ -78,11 +78,11 @@
 На сервере, где уже стоит `amneziawg-installer`:
 
 ```bash
-# 1. Скачать .deb из Releases (например v0.1.12)
-wget https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases/download/v0.1.12/awg-panel_0.1.12_all.deb
+# 1. Скачать .deb из Releases (например v0.1.13)
+wget https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases/download/v0.1.13/awg-panel_0.1.13_all.deb
 
 # 2. Установить (именно dpkg — без предупреждения _apt о песочнице)
-sudo dpkg -i awg-panel_0.1.12_all.deb
+sudo dpkg -i awg-panel_0.1.13_all.deb
 
 # 3. Сменить пароль и открыть панель
 sudo awg-panel-set-password
@@ -174,8 +174,8 @@ sudo systemctl restart awg-panel     # применить
 
 ### Клиенты
 
-- Добавление: `имена через пробел/запятую`, имя — `^[A-Za-z0-9_-]{1,63}$`, срок — `дней (пусто=∞)`, max 100 имён за раз.
-- Удаление: чекбоксы + «Удалить выбранные» (тоже max 100).
+- Добавление: `имена через пробел/запятую`, имя — `^[A-Za-z0-9_-]{1,63}$`, срок — `дней (пусто=∞)`, max 100 имён за раз. Кнопка «Сгенерировать имя» подставляет `prefix` + случайный hex из `[client_names]` (дефолт `user_` + 16 символов, аналог `openssl rand -hex 8`).
+- Удаление: чекбоксы + «Удалить выбранные» (тоже max 100); кнопка неактивна, пока ничего не выбрано. «Добавить» и «Удалить выбранные» — в одном ряду.
 - Пересоздание ключей («Пересоздать») — только из карточки клиента, по одному. Эндпоинт технически принимает батч, UI батч-regen не предлагает (защита от случайного слома всех конфигов разом).
 
 ### Карточка клиента
@@ -249,7 +249,7 @@ awg-control-pan/
 │   ├── awg-panel.service        # systemd-юнит (User=root, см. SECURITY.md почему)
 │   ├── config.ini.example
 │   └── sudoers                  # для non-root/dev вызовов (в проде сервис от root, sudo не используется)
-├── tests/test_panel.py  # unittest, только stdlib (43 теста на 0.1.12)
+├── tests/test_panel.py  # unittest, только stdlib (53 теста на 0.1.13)
 ├── build_deb.sh         # сборка .deb (root-owned, без pycache)
 ├── docs/                # INSTALL, CONFIGURATION, TROUBLESHOOTING, DEVELOPMENT (SECURITY.md — в корне)
 ├── .github/workflows/
@@ -285,14 +285,14 @@ awg-control-pan/
 # тесты (только stdlib, без pip/venv)
 python3 -m unittest discover -s tests -v
 
-# 43/43 OK на 0.1.12. Полный e2e — только на VPS с инсталлером
+# 53/53 OK на 0.1.13. Полный e2e — только на VPS с инсталлером
 # (нужны /root/awg/manage_amneziawg.sh и /etc/amnezia/.../awg0.conf)
 ```
 
 ```bash
 # локальная сборка .deb (нужен dpkg-deb; на Windows — в WSL)
-./build_deb.sh 0.1.12
-# → dist/awg-panel_0.1.12_all.deb
+./build_deb.sh 0.1.13
+# → dist/awg-panel_0.1.13_all.deb
 ```
 
 Детали кодстайла, тестов, релизного цикла — [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) и [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -329,7 +329,7 @@ cat /var/log/awg-panel/auth.log
 Там же, где их хранит инсталлер (`/root/awg/*.conf`, `awg0.conf`). Своей БД у панели нет — снесли панель, клиенты остались.
 
 **Можно ли открыть панель в интернет?**
-Технически да (HTTPS + rate-limit + CSP/HSTS), но дефолтный `admin/admin` смените **до** открытия. Идеально — ограничить по IP на фаерволе и держать панель за VPN Jump-хостом. См. [SECURITY.md](SECURITY.md).
+Технически да (HTTPS + rate-limit + CSP/HSTS), но пароль из примера (`admin/admin` в `config.ini.example`) смените **до** открытия. Идеально — ограничить по IP на фаерволе и держать панель за VPN Jump-хостом. См. [SECURITY.md](SECURITY.md).
 
 **Зачем сервис от root, это не опасно?**
 `manage` сам требует root (wg/iptables/конфиги). Прослойка `awgpanel+sudo` не добавляла безопасности, но ломалась о systemd-песочницу. Компромисс зафиксирован: минимальный юнит (`PrivateTmp` only), вызовы без shell, allowlist helper, капы и таймауты. Разбор — [SECURITY.md](SECURITY.md#почему-сервис-работает-от-root).
@@ -343,13 +343,13 @@ cat /var/log/awg-panel/auth.log
 
 - Кратко: [CHANGELOG.md](CHANGELOG.md).
 - Файлы: [GitHub Releases](https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases) (`.deb` прикладывает CI по тегу `v*`).
-- Старые неработоспособные релизы до `0.1.8` удалены; git-теги `v0.1.1–v0.1.12` оставлены (при нужде `.deb` пересоберёт CI).
+- Старые неработоспособные релизы до `0.1.8` удалены; git-теги `v0.1.1–v0.1.13` оставлены (при нужде `.deb` пересоберёт CI).
 
 ---
 
 ## Участие в разработке
 
-PR приветствуются. Прочитайте [CONTRIBUTING.md](CONTRIBUTING.md): CRLF запрещён (`.gitattributes` держит LF для `postinst/helper/*.py`), тесты обязательны (`43/43`), коммиты — короткие imperative на английском или русском.
+PR приветствуются. Прочитайте [CONTRIBUTING.md](CONTRIBUTING.md): CRLF запрещён (`.gitattributes` держит LF для `postinst/helper/*.py`), тесты обязательны (`53/53`), коммиты — короткие imperative на английском или русском.
 
 ---
 

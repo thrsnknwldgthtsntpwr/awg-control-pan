@@ -33,7 +33,7 @@ class AuthStore:
     password file, no hashing. Comparison is constant-time.
     """
 
-    users: dict = field(default_factory=lambda: {"admin": "admin"}, repr=False)
+    users: dict = field(default_factory=dict, repr=False)
     auth_log: str = "/var/log/awg-panel/auth.log"
     ttl_sec: int = 1800
     # App-level login rate-limit (NOT iptables/ufw/nftables): the service
@@ -67,7 +67,7 @@ class AuthStore:
         elif self.lock_sec > 1440 * 60:
             self.lock_sec = 1440 * 60
         if not isinstance(self.users, dict) or not self.users:
-            self.users = {"admin": "admin"}
+            raise ValueError("AuthStore: пустой users (нужна секция [users])")
 
     def verify(self, username: str, password: str) -> bool:
         try:

@@ -8,7 +8,7 @@ cd awg-control-pan
 
 # тесты — только stdlib, pip/venv не нужен
 python3 -m unittest discover -s tests -v
-# ожидаемо: 43/43 OK (на 0.1.12)
+# ожидаемо: 53/53 OK (на 0.1.13)
 ```
 
 Полный e2e — только на VPS с установленным инсталлером (нужны
@@ -30,7 +30,7 @@ sudo visudo -c -f packaging/sudoers
 ## Кодстайл (коротко)
 
 - Python: stdlib only, без внешних зависимостей. Импорты сверху, типы — по вкусу, но без `Any`-каши.
-- HTML собирается в `server.py` f-строками + `html.escape` через `e()`. Инлайн-`<script>` запрещён (CSP `script-src 'self'`) — JS только в `COPY_JS` → `/static/copy.js`.
+- HTML собирается в `server.py` f-строками + `html.escape` через `e()`. Инлайн-`<script>` запрещён (CSP `script-src 'self'`) — JS только в `COPY_JS` → `/static/copy.js` и `CLIENTS_JS` → `/static/clients.js`.
 - CSS — в `STYLE_CSS` (`server.py`). Кнопки `<button>` и `<a class=btn>` должны выглядеть одинаково (`font:inherit`).
 - Bash (`helper`, `postinst`, `build_deb.sh`): `set -euo pipefail`, `PATH` зажат, без `eval`, LF-окончания обязательны (следит `.gitattributes`).
 - Имена клиентов: `^[A-Za-z0-9_-]{1,63}$` (`validate.py`). Новую валидацию — туда же + тесты.
@@ -49,6 +49,8 @@ sudo visudo -c -f packaging/sudoers
 | `TestSystemInfo` | устойчивость к битому `/proc` |
 | `TestPackaging` | root-owned `.deb`, `postinst` (права, next-steps без legacy), `service User=root`, `control` без sudo |
 | `TestClientPage` | порядок блоков Пир/Конфиг/vpn/QR, кнопки, copy.js-роут, CSS без page-h-scroll |
+| `TestClientsListPage` | «Удалить выбранные» disabled без выбора, «Добавить»/«Удалить» в одном ряду, «Сгенерировать имя» + data-атрибуты, clients.js-роут |
+| `TestClientNames` | дефолты/кастом `[client_names]`, clamp `rand_bytes`, fallback плохого префикса, лимит длины 63 |
 | `TestHttpRedirect` | `http://:80 → 301 https://:port` (URL, Host-валидация, live-редирект без кук) |
 
 Новый фикс = новый регресс-тест. Правило простое: «упало на VPS → тест, потом фикс».
@@ -56,8 +58,8 @@ sudo visudo -c -f packaging/sudoers
 ## Сборка .deb
 
 ```bash
-./build_deb.sh 0.1.12
-# → dist/awg-panel_0.1.12_all.deb (dist/ — в .gitignore)
+./build_deb.sh 0.1.13
+# → dist/awg-panel_0.1.13_all.deb (dist/ — в .gitignore)
 ```
 
 Что делает скрипт:

@@ -399,16 +399,19 @@ class Handler(BaseHTTPRequestHandler):
         tbl = self._clients_table(clients, stats_map, pubkeys)
         return self._layout("Клиенты", "clients",
             f"<h1>Клиенты <span class=muted>({len(clients)})</span></h1>{m}"
-            "<div class=card><form method=post action=/clients/add class=row>"
+            "<div class=card>"
+            f"<form method=post action=/clients/add id=addf class=row>"
             f"<input type=hidden name=csrf value='{e(csrf)}'>"
-            "<input name=names placeholder='имена через пробел/запятую' required>"
+            "<input name=names id=names placeholder='имена через пробел/запятую' required>"
             "<input name=days placeholder='дней (пусто=∞)' size=10 pattern='[0-9]*'>"
-            "<button>Добавить</button></form>"
+            f"<button type=button id=genbtn data-prefix='{e(self.cfg.client_name_prefix)}' "
+            f"data-rand-bytes='{self.cfg.client_name_rand_bytes}'>Сгенерировать имя</button></form>"
+            "<div class=row><button type=submit form=addf>Добавить</button> "
+            "<button type=submit form=delf id=delbtn disabled>Удалить выбранные</button></div>"
             f"<form method=post action=/clients/delete id=delf><input type=hidden name=csrf value='{e(csrf)}'>"
-            "<div class=row><button>Удалить выбранные</button></div>"
             f"{tbl}</form>"
             "<p class=muted>Таблица = manage list --json (+stats, ключи из awg0.conf). "
-            "Удаление множественное чекбоксами. Имя-ссылка → карточка.</p></div>", csrf)
+            "Удаление множественное чекбоксами. Имя-ссылка → карточка.</p></div>" + CLIENTS_TAG, csrf)
 
     def _page_client(self, name: str) -> str:
         s0 = self._sess()
@@ -480,6 +483,9 @@ class Handler(BaseHTTPRequestHandler):
                               extra={"Cache-Control": "max-age=3600"}, no_store=False)
         if u.path == "/static/copy.js":
             return self._send(200, COPY_JS, "application/javascript; charset=utf-8",
+                              extra={"Cache-Control": "max-age=3600"}, no_store=False)
+        if u.path == "/static/clients.js":
+            return self._send(200, CLIENTS_JS, "application/javascript; charset=utf-8",
                               extra={"Cache-Control": "max-age=3600"}, no_store=False)
         if u.path == "/login":
             return self._send(200, self._page_login())
@@ -864,6 +870,21 @@ function awgBindCopy(){document.querySelectorAll('button[data-src]').forEach(fun
 if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',awgBindCopy)}else{awgBindCopy()}
 """
 COPY_TAG = '<script src="/static/copy.js" defer></script>'
+
+
+# Clients page helper (0.1.13+). Served as /static/clients.js and included
+# via <script src> (CLIENTS_TAG): the CSP header (script-src 'self', 0.1.8+)
+# blocks inline scripts, so this MUST NOT be inlined into pages.
+# - Delete button (#delbtn) stays disabled until a checkbox is checked.
+# - Generate button (#genbtn) fills #names with prefix + random hex
+#   (client-side analogue of `prefix$(openssl rand -hex N)`); prefix and N
+#   come from [client_names] via data-attributes rendered by _page_clients.
+CLIENTS_JS = """function awgClientsRefreshDel(){var b=document.getElementById('delbtn'),f=document.getElementById('delf');if(!b||!f){return}var boxes=f.querySelectorAll('input[name=sel]'),any=false;for(var i=0;i<boxes.length;i++){if(boxes[i].checked){any=true;break}}b.disabled=!any}
+function awgClientsGen(){var g=document.getElementById('genbtn'),n=document.getElementById('names');if(!g||!n){return}var prefix=g.getAttribute('data-prefix')||'user_';var nb=parseInt(g.getAttribute('data-rand-bytes')||'8',10);if(!(nb>=1&&nb<=32)){nb=8}var buf=new Uint8Array(nb),ok=false;try{if(window.crypto&&window.crypto.getRandomValues){window.crypto.getRandomValues(buf);ok=true}}catch(e){ok=false}if(!ok){for(var i=0;i<nb;i++){buf[i]=Math.floor(Math.random()*256)}}var hx='';for(var j=0;j<buf.length;j++){var h=buf[j].toString(16);hx+=h.length<2?'0'+h:h}n.value=prefix+hx;try{n.focus()}catch(e){}}
+function awgClientsInit(){var f=document.getElementById('delf');if(f){f.addEventListener('change',function(ev){var t=ev&&ev.target;if(t&&t.getAttribute&&t.getAttribute('name')==='sel'){awgClientsRefreshDel()}})}var g=document.getElementById('genbtn');if(g){g.addEventListener('click',awgClientsGen)}awgClientsRefreshDel()}
+if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',awgClientsInit)}else{awgClientsInit()}
+"""
+CLIENTS_TAG = '<script src="/static/clients.js" defer></script>'
 
 
 STYLE_CSS = """*{box-sizing:border-box}body{margin:0;font:14px/1.45 system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#eef1f5;color:#1f2937;display:flex;min-height:100vh;overflow-x:hidden}
