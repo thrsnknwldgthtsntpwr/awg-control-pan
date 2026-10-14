@@ -9,6 +9,8 @@
 - `/root/awg/manage_amneziawg.sh` — исполняемый.
 - `/etc/amnezia/amneziawg/awg0.conf` — существует.
 - Открытый порт панели (дефолт `8443/tcp`) — проверьте фаервол.
+- Для авто-редиректа `http://<IP>/ → https://<IP>:8443/` — открытый `80/tcp`
+  (`http_redirect_port = 80` по умолчанию; `0` — выключить редирект).
 
 Зависимости `.deb`: `python3`, `openssl`, `systemd`. Рекомендуется `qrencode`.
 

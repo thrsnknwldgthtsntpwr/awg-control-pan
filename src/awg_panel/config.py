@@ -19,6 +19,9 @@ MAX_USERS = 254
 class PanelConfig:
     host: str = "0.0.0.0"
     port: int = 8443
+    # Plain-HTTP redirector: :http_redirect_port -> https://<host>:port/.
+    # 0 = disabled (only HTTPS stays). Standard = 80.
+    http_redirect_port: int = 80
     cert: str = "/etc/awg-panel/cert.pem"
     key: str = "/etc/awg-panel/key.pem"
     manage_script: str = "/root/awg/manage_amneziawg.sh"
@@ -124,6 +127,12 @@ def load_config(path: str = "/etc/awg-panel/config.ini") -> PanelConfig:
         cfg.port = 8443
     if not 1 <= cfg.port <= 65535:
         cfg.port = 8443
+    try:
+        cfg.http_redirect_port = int(s.get("http_redirect_port", cfg.http_redirect_port))
+    except (TypeError, ValueError):
+        cfg.http_redirect_port = 80
+    if cfg.http_redirect_port != 0 and not 1 <= cfg.http_redirect_port <= 65535:
+        cfg.http_redirect_port = 80
     cfg.cert = (s.get("cert", cfg.cert) or cfg.cert).strip() or cfg.cert
     cfg.key = (s.get("key", cfg.key) or cfg.key).strip() or cfg.key
     cfg.manage_script = (s.get("manage_script", cfg.manage_script) or cfg.manage_script).strip() or cfg.manage_script

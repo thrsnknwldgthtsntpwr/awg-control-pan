@@ -85,11 +85,18 @@ visudo -c
 ## Порт занят / не открывается
 
 ```bash
-sudo ss -tlnp | grep 8443
-# поменяйте port в /etc/awg-panel/config.ini + restart
+sudo ss -tlnp | grep -E ':(80|8443)'
+# поменяйте port / http_redirect_port в /etc/awg-panel/config.ini + restart
 ```
 
 Self-signed сертификат — это нормально: браузер покажет предупреждение, нужно подтвердить исключение один раз.
+
+## http://<IP>:8443 не отвечает, а https://<IP>:8443 работает
+
+Так и должно быть: TLS-порт не понимает plain-HTTP (handshake рвётся до HTTP).
+Заходите `http://<IP>/` (редирект `301 → https://<IP>:8443/`, нужен открытый
+`80/tcp` и `http_redirect_port = 80`) либо сразу `https://<IP>:8443/`.
+Проверка редиректа: `curl -v http://<IP>/` → `301` + `Location: https://<IP>:8443/`.
 
 ## Предупреждение _apt при установке
 

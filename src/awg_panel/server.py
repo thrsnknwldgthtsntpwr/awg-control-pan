@@ -5,8 +5,10 @@ import concurrent.futures
 import datetime
 import hmac
 import html
+import re
 import ssl
 import sys
+import threading
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from http import cookies
@@ -679,6 +681,179 @@ class Handler(BaseHTTPRequestHandler):
         self._send(405, "method not allowed", "text/plain")
 
 
+# ---------- HTTP -> HTTPS redirector (port 80 -> https port) ----------
+# Plain-HTTP listener that NEVER serves panel content: only 301 to https.
+# Needed because a TLS-only socket cannot answer plain-http requests on the
+# same port (handshake fails before any HTTP byte can be sent).
+_REDIRECT_HOST_RE = re.compile(r"^[A-Za-z0-9.\-]{1,253}$")
+_REDIRECT_IPV6_RE = re.compile(r"^[0-9A-Fa-f:.]{2,45}$")
+
+
+def _extract_redirect_hostname(host_header: str | None) -> str | None:
+    """Hostname from Host header without port. None = invalid/missing.
+
+    Strict to avoid open-redirect / response-splitting via crafted Host.
+    """
+    if not host_header or not isinstance(host_header, str):
+        return None
+    h = host_header.strip()
+    if not h or len(h) > 300:
+        return None
+    if any(c in h for c in ("\r", "\n", " ", "/", "?", "#", "@", "\\")):
+        return None
+    if h.startswith("["):
+        end = h.find("]")
+        if end == -1:
+            return None
+        inner = h[1:end]
+        rest = h[end + 1:]
+        if rest and not rest.startswith(":"):
+            return None
+        if rest.startswith(":") and not rest[1:].isdigit():
+            return None
+        if not inner or ":" not in inner or not _REDIRECT_IPV6_RE.match(inner):
+            return None
+        return h[: end + 1]
+    if h.count(":") > 1:
+        return None  # bare IPv6 without brackets is invalid in Host
+    if ":" in h:
+        hostname, _, port = h.partition(":")
+        if not port.isdigit() or not hostname:
+            return None
+        h = hostname
+    if not _REDIRECT_HOST_RE.match(h):
+        return None
+    if h.startswith((".", "-")) or h.endswith((".", "-")) or ".." in h:
+        return None
+    return h
+
+
+def _sanitize_redirect_path(path: str | None) -> str:
+    if not path or not isinstance(path, str) or not path.startswith("/"):
+        return "/"
+    if "\r" in path or "\n" in path:
+        return "/"
+    for ch in path:
+        if ord(ch) < 32:
+            return "/"
+    if len(path) > 8192:
+        return "/"
+    return path
+
+
+def build_https_redirect_url(host_header: str | None, path: str | None,
+                             https_port: int) -> str | None:
+    """https://<host>[:port]<path> or None when Host/port invalid."""
+    hostname = _extract_redirect_hostname(host_header)
+    if not hostname:
+        return None
+    try:
+        port = int(https_port)
+    except (TypeError, ValueError):
+        return None
+    if not 1 <= port <= 65535:
+        return None
+    safe_path = _sanitize_redirect_path(path)
+    if port == 443:
+        return f"https://{hostname}{safe_path}"
+    return f"https://{hostname}:{port}{safe_path}"
+
+
+class HttpToHttpsRedirectHandler(BaseHTTPRequestHandler):
+    """Minimal 301 redirector. No cookies, no auth, no static, no state."""
+    server_version = f"awg-panel/{__version__}"
+    https_port: int = 8443
+    timeout = 10
+
+    def log_request(self, code="-", size="-"):
+        pass  # access log silenced: :80 is scanned constantly, 301 is noise
+
+    def log_error(self, format, *args):
+        sys.stderr.write(f"awg-panel-redirect: {self.client_address[0]} {format % args}\n")
+
+    def log_message(self, format, *args):
+        # Only send_error() reaches here (format 'code %d, ...').
+        try:
+            code = int(args[0]) if args else 0
+        except (TypeError, ValueError):
+            code = 0
+        if code >= 400:
+            sys.stderr.write(f"awg-panel-redirect: {self.client_address[0]} {format % args}\n")
+
+    def _do_redirect(self):
+        # Always close: POST bodies sent in clear to :80 are discarded,
+        # leftover bytes must not be parsed as the next request (desync).
+        self.close_connection = True
+        url = build_https_redirect_url(self.headers.get("Host"), self.path,
+                                       self.https_port)
+        if url is None:
+            self.log_error("code 400, bad Host")
+            body = b"bad request\n"
+            self.send_response(400)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Pragma", "no-cache")
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+            return
+        body = f"Redirecting to {url}\n".encode("utf-8")
+        self.send_response(301)
+        self.send_header("Location", url)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        # Short cache: permanent enough to skip cleartext next time,
+        # short enough to not stick forever after a port change.
+        self.send_header("Cache-Control", "public, max-age=3600")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    do_GET = _do_redirect
+    do_HEAD = _do_redirect
+    do_POST = _do_redirect
+    do_PUT = _do_redirect
+    do_DELETE = _do_redirect
+    do_PATCH = _do_redirect
+    do_OPTIONS = _do_redirect
+    do_TRACE = _do_redirect
+
+
+def start_http_redirector(cfg: PanelConfig):
+    """Start plain-HTTP :http_redirect_port -> https :port in a daemon thread.
+
+    Never fails the main HTTPS server: port busy / no permission / same port
+    as HTTPS just logs to stderr and returns None (panel stays on HTTPS).
+    """
+    rport = getattr(cfg, "http_redirect_port", 80)
+    try:
+        rport = int(rport)
+    except (TypeError, ValueError):
+        rport = 80
+    if not rport:
+        return None
+    if rport == cfg.port:
+        sys.stderr.write(
+            f"awg-panel-redirect: disabled (http_redirect_port == port == {rport})\n")
+        return None
+    HttpToHttpsRedirectHandler.https_port = cfg.port
+    try:
+        srv = ThreadingHTTPServer((cfg.host, rport), HttpToHttpsRedirectHandler)
+    except OSError as ex:
+        sys.stderr.write(f"awg-panel-redirect: :{rport} disabled ({ex})\n")
+        return None
+    srv.daemon_threads = True
+    t = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.5},
+                         daemon=True, name="http-redirect")
+    t.start()
+    print(f"awg-panel http://{cfg.host}:{rport} -> https :{cfg.port} (301)")
+    return srv
+
+
 # Copy-to-clipboard helper (0.1.6+). Served as /static/copy.js and included
 # via <script src> (COPY_TAG): the CSP header (script-src 'self', 0.1.8+)
 # blocks inline scripts, so this MUST NOT be inlined into pages.
@@ -732,5 +907,6 @@ def run(cfg: PanelConfig):
     except (OSError, ssl.SSLError) as ex:
         raise SystemExit(f"TLS load failed ({cfg.cert}, {cfg.key}): {ex}")
     srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+    start_http_redirector(cfg)
     print(f"awg-panel https://{cfg.host}:{cfg.port} (manage={cfg.manage_script})")
     srv.serve_forever()

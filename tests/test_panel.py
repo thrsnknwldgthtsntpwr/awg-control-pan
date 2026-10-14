@@ -570,5 +570,105 @@ class TestClientPage(unittest.TestCase):
         self.assertIn("max-width:100%", pre_rule)
 
 
+class TestHttpRedirect(unittest.TestCase):
+    def test_build_url(self):
+        from awg_panel.server import build_https_redirect_url
+        self.assertEqual(
+            build_https_redirect_url("10.129.110.110:80", "/", 8443),
+            "https://10.129.110.110:8443/")
+        self.assertEqual(
+            build_https_redirect_url("10.129.110.110", "/status?tab=awg", 8443),
+            "https://10.129.110.110:8443/status?tab=awg")
+        # 443 не пишется в URL
+        self.assertEqual(
+            build_https_redirect_url("example.com:80", "/clients", 443),
+            "https://example.com/clients")
+        self.assertEqual(
+            build_https_redirect_url("[::1]:80", "/", 8443),
+            "https://[::1]:8443/")
+        # CRLF в Host -> отказ (защита от response-splitting/open-redirect)
+        self.assertIsNone(build_https_redirect_url("evil.com\r\nX: y", "/", 8443))
+        self.assertIsNone(build_https_redirect_url("a/b", "/", 8443))
+        self.assertIsNone(build_https_redirect_url(None, "/", 8443))
+        self.assertIsNone(build_https_redirect_url("", "/", 8443))
+        # CRLF в path -> сброс на /
+        self.assertEqual(
+            build_https_redirect_url("example.com", "/a\r\nb", 8443),
+            "https://example.com:8443/")
+
+    def test_config_redirect_port(self):
+        import tempfile
+        from awg_panel.config import load_config
+        with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
+            f.write("[server]\nport = 8443\n")
+            p = f.name
+        self.assertEqual(load_config(p).http_redirect_port, 80)
+        with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
+            f.write("[server]\nport = 8443\nhttp_redirect_port = 0\n")
+            p2 = f.name
+        self.assertEqual(load_config(p2).http_redirect_port, 0)
+        with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
+            f.write("[server]\nport = 8443\nhttp_redirect_port = garbage\n")
+            p3 = f.name
+        self.assertEqual(load_config(p3).http_redirect_port, 80)
+        with tempfile.NamedTemporaryFile("w+", suffix=".ini", delete=False) as f:
+            f.write("[server]\nport = 8443\nhttp_redirect_port = 99999\n")
+            p4 = f.name
+        self.assertEqual(load_config(p4).http_redirect_port, 80)
+
+    def test_live_redirect_only_301_no_cookies(self):
+        import http.client
+        import socket
+        import time
+        from awg_panel.config import PanelConfig
+        from awg_panel.server import start_http_redirector
+
+        def free():
+            s = socket.socket()
+            s.bind(("127.0.0.1", 0))
+            p = s.getsockname()[1]
+            s.close()
+            return p
+
+        rport, hport = free(), free()
+        cfg = PanelConfig(host="127.0.0.1", port=hport, http_redirect_port=rport)
+        srv = start_http_redirector(cfg)
+        self.assertIsNotNone(srv)
+        try:
+            time.sleep(0.3)
+            c = http.client.HTTPConnection("127.0.0.1", rport, timeout=5)
+            c.request("GET", "/status?tab=awg", headers={"Host": "127.0.0.1"})
+            r = c.getresponse()
+            r.read()
+            self.assertEqual(r.status, 301)
+            self.assertEqual(r.getheader("Location"),
+                             f"https://127.0.0.1:{hport}/status?tab=awg")
+            self.assertIsNone(r.getheader("Set-Cookie"))
+            # POST тоже только редирект (тело в cleartext отбрасывается)
+            c2 = http.client.HTTPConnection("127.0.0.1", rport, timeout=5)
+            c2.request("POST", "/login", body="user=admin",
+                       headers={"Host": "127.0.0.1"})
+            r2 = c2.getresponse()
+            r2.read()
+            self.assertEqual(r2.status, 301)
+            # кривой Host -> 400, а не редирект наружу
+            c3 = http.client.HTTPConnection("127.0.0.1", rport, timeout=5)
+            c3.request("GET", "/", headers={"Host": "bad/host"})
+            r3 = c3.getresponse()
+            r3.read()
+            self.assertEqual(r3.status, 400)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_same_port_disables_redirector(self):
+        from awg_panel.config import PanelConfig
+        from awg_panel.server import start_http_redirector
+        cfg = PanelConfig(host="127.0.0.1", port=8443, http_redirect_port=8443)
+        self.assertIsNone(start_http_redirector(cfg))
+        cfg2 = PanelConfig(host="127.0.0.1", port=8443, http_redirect_port=0)
+        self.assertIsNone(start_http_redirector(cfg2))
+
+
 if __name__ == "__main__":
     unittest.main()

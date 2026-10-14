@@ -139,8 +139,9 @@ sudo apt purge awg-panel        # удалить всё: конфиг, ключ�
 
 | Ключ | Дефолт | Что значит |
 |-------------------|--------|------------|
-| `host` | `0.0.0.0` | На каком адресе слушать. |
+| `host` | `0.0.0.0` | На каком адресе слушать (и HTTPS, и HTTP-редирект). |
 | `port` | `8443` | Порт HTTPS. `1..65535`. |
+| `http_redirect_port` | `80` | `http://:80 → https://:port` (`301`, только редирект). `0` = выкл. |
 | `cert` / `key` | `/etc/awg-panel/cert.pem` / `key.pem` | Self-signed создаёт `postinst` (`key.pem` — `600`). |
 | `webusername` / `webpassword` | `admin` / `admin` | Legacy (fallback без `[users]`). `%` разрешён, пробелы в пароле значимы. |
 | `[users]` `user.N` / `password.N` | — | До 254 пользователей (`N=1..254`), важнее legacy. Ошибки — отказ старта. |
@@ -198,7 +199,7 @@ sudo systemctl restart awg-panel     # применить
 ## Архитектура
 
 ```text
-                    HTTPS :8443 (self-signed)
+                    HTTPS :8443 (self-signed) + HTTP :80 -> 301 https
   ┌──────────┐   ─────────────────────────▶   ┌─────────────────────┐
   │ Браузер  │   SSR-формы + 1 same-origin    │  awg-panel (root)   │
   │ (users)  │   JS (/static/copy.js)         │  stdlib http.server │
