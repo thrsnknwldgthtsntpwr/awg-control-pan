@@ -598,7 +598,8 @@ class TestClientPage(unittest.TestCase):
         from awg_panel.server import STYLE_CSS
         self.assertIn("body{", STYLE_CSS)
         self.assertIn("overflow-x:hidden", STYLE_CSS)
-        self.assertIn(".grid>*{min-width:0}", STYLE_CSS)
+        self.assertNotIn(".grid", STYLE_CSS)
+        self.assertNotIn(".tabs", STYLE_CSS)
         self.assertIn("min-width:0", STYLE_CSS)
         # overflowing element itself scrolls internally
         self.assertIn("pre{", STYLE_CSS)
