@@ -714,6 +714,67 @@ class TestClientsListPage(unittest.TestCase):
         self.assertEqual(raw.decode("utf-8"), srv.CLIENTS_JS)
 
 
+class TestClientsDeleteConfirm(unittest.TestCase):
+    def _post(self, path, form, cmd_remove=None):
+        from types import SimpleNamespace
+        from awg_panel import server as srv
+        from awg_panel.config import PanelConfig
+        h = srv.Handler.__new__(srv.Handler)
+        h.cfg = PanelConfig()
+        h.path = path
+        h.command = "POST"
+        h.client_address = ("127.0.0.1", 12345)
+        authed = SimpleNamespace(csrf="t", sid="s")
+        h._authed = authed
+        h._sess = lambda: authed
+        h._require_auth = lambda: authed
+        h._parse_form = lambda: form
+        h._check_csrf = lambda f: True
+        captured = {}
+        h._send_auth = lambda code, body, *a, **k: captured.setdefault("send", (code, body))
+        h._redirect = lambda where, cookie=None: captured.setdefault("redirect", where)
+        if cmd_remove is not None:
+            import unittest.mock as mock
+            with mock.patch.object(srv, "cmd_remove", cmd_remove):
+                h.do_POST()
+        else:
+            h.do_POST()
+        return captured
+
+    def test_delete_confirm_page(self):
+        from types import SimpleNamespace
+        from awg_panel import server as srv
+        from awg_panel.config import PanelConfig
+        h = srv.Handler.__new__(srv.Handler)
+        h.cfg = PanelConfig()
+        h._sess = lambda: SimpleNamespace(csrf="t")
+        body = h._page_clients_delete_confirm(["alice", "bob"])
+        self.assertIn("Удаление пользователей: Вы уверены?", body)
+        self.assertIn("alice", body)
+        self.assertIn("bob", body)
+        self.assertIn("/clients/delete/confirm", body)
+        self.assertIn("Подтвердить", body)
+        self.assertIn("Отмена", body)
+
+    def test_delete_first_post_does_not_remove(self):
+        from awg_panel.manage import ManageResult
+        calls = []
+        cap = self._post("/clients/delete", {"sel": ["alice"], "csrf": "t"},
+                         cmd_remove=lambda ms, names: calls.append(names) or ManageResult(True, 0, None, ""))
+        self.assertEqual(calls, [])
+        code, body = cap["send"]
+        self.assertEqual(code, 200)
+        self.assertIn("Удаление пользователей: Вы уверены?", body)
+
+    def test_delete_confirm_post_removes(self):
+        calls = []
+        from awg_panel.manage import ManageResult
+        cap = self._post("/clients/delete/confirm", {"sel": ["alice"], "csrf": "t"},
+                         cmd_remove=lambda ms, names: calls.append(names) or ManageResult(True, 0, None, ""))
+        self.assertEqual(calls, [["alice"]])
+        self.assertEqual(cap.get("redirect"), "/clients")
+
+
 class TestLoginPage(unittest.TestCase):
     def _page(self, err=""):
         from awg_panel import server as srv

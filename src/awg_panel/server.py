@@ -602,7 +602,25 @@ class Handler(BaseHTTPRequestHandler):
             f"<form method=post action=/clients/delete id=delf><input type=hidden name=csrf value='{e(csrf)}'>"
             f"{tbl}</form>"
             "<p class=muted>Таблица = manage list --json (+stats, ключи из awg0.conf). "
-            "Удаление множественное чекбоксами. Имя-ссылка → карточка.</p></div>" + CLIENTS_TAG, csrf)
+            "Удаление множественное чекбоксами. Имя-ссылка → карточка. "
+            "Удаление требует подтверждения.</p></div>" + CLIENTS_TAG, csrf)
+
+    def _page_clients_delete_confirm(self, names: list[str]) -> str:
+        s = self._sess()
+        csrf = s.csrf if s else ""
+        items = "".join(f"<tr><td>{e(n)}</td></tr>" for n in names)
+        hidden = "".join(f"<input type=hidden name=sel value='{e(n)}'>" for n in names)
+        return self._layout("Удаление пользователей", "clients",
+            "<div class=card style='max-width:520px'>"
+            "<h1>Удаление пользователей</h1>"
+            "<p>Удаление пользователей: Вы уверены?</p>"
+            f"<table>{items}</table>"
+            "<div class=row>"
+            f"<form method=post action=/clients/delete/confirm>"
+            f"<input type=hidden name=csrf value='{e(csrf)}'>{hidden}"
+            "<button>Подтвердить</button></form> "
+            "<a class=btn href=/clients>Отмена</a></div>"
+            "<p class=muted>Операция опасная: конфиги и QR выбранных клиентов будут удалены.</p></div>", csrf)
 
     def _page_client(self, name: str) -> str:
         s0 = self._sess()
@@ -865,6 +883,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._redirect("/clients")
             return _fail("add failed", r.rc, r.stderr)
         if u.path == "/clients/delete":
+            names, bad = sel_list()
+            if bad:
+                return self._send_auth(200, self._page_clients(f"Плохие имена в выборе: {', '.join(bad[:10])}"))
+            if not names:
+                return self._send_auth(200, self._page_clients("Ничего не выбрано"))
+            return self._send_auth(200, self._page_clients_delete_confirm(names))
+        if u.path == "/clients/delete/confirm":
             names, bad = sel_list()
             if bad:
                 return self._send_auth(200, self._page_clients(f"Плохие имена в выборе: {', '.join(bad[:10])}"))
