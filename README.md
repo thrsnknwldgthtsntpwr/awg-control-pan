@@ -43,7 +43,7 @@
 | Раздел | Что умеет |
 |--------|-----------|
 | **Система** | Одна страница сверху вниз: «Система» (uptime, load, CPU, RAM, диск `/` из `/proc`), «Интерфейсы» (RX/TX-счётчики), «AWG» (`manage check --json` + маркеры `AWG_PROTOCOL` / `SCRIPT_VERSION`), «Действия» (перезагрузка сервера / перезапуск `awg-quick@awg0` с подтверждением), «Журнал входов» (последние 10 строк). |
-| **Клиенты** | Таблица как `manage list --verbose`: имя, IP, префикс ключа, статус, RX/TX (`stats --json`), срок. Сортировка кликом по заголовкам: Имя, IP, Статус, RX/TX (сумма), Срок. Чекбоксы, массовое удаление (кнопка неактивна без выбора), добавление нескольких имён разом, генератор имён (`[client_names]`). Кнопки «Добавить» и «Удалить выбранные» в одном ряду. |
+| **Клиенты** | Таблица как `manage list --verbose`: имя, IP, префикс ключа, статус, RX/TX (`stats --json`), срок. Сортировка кликом по заголовкам: Имя, IP, Статус, RX/TX (сумма), Срок. Чекбоксы, массовое удаление (кнопка неактивна без выбора, удаление двухшаговое с подтверждением), добавление нескольких имён разом, генератор имён (`[client_names]`). Кнопки «Добавить» и «Удалить выбранные» в одном ряду. |
 | **Карточка клиента** | Блоки сверху вниз: **Пир → Конфиг → vpn:// → QR**. Кнопки: Пересоздать, Скачать `.conf`, `QR.png` (в новой вкладке), Скопировать для Конфига и `vpn://`. |
 | **Справка** | Блок «Github» со ссылками на `awg-control-pan` и `amneziawg-installer` (открываются в новой вкладке). |
 | **Сроки** | При добавлении — только днями (`1..3650`, пусто = бессрочно). Чистку истёкших делает крон инсталлера. |
@@ -105,10 +105,11 @@ sudo journalctl -u awg-panel -n 30 --no-pager
 ## Требования
 
 - **ОС:** Debian 11+ / Ubuntu 22.04+ (systemd).
-- **Установленный и настроенный** `amneziawg-installer`:
+- **Установленный и настроенный** `amneziawg-installer` **≥ v5.36.0** (проверено на `6.0.0`):
   - `/root/awg/manage_amneziawg.sh` (исполняемый),
   - `/etc/amnezia/amneziawg/awg0.conf`,
   - `/root/awg/awgsetup_cfg.init` (маркеры `AWG_PROTOCOL`, `SCRIPT_VERSION`).
+  - На более старых версиях `--json`-вывод manage битый (нечисловой порт/счётчики ломают JSON, WARN в stdout) и нет полей `expires_at`/`protocol` — сроки и поколение не покажутся, возможны `manage list/check failed` в UI. Минимум `v5.36.0` — первый релиз со всеми нужными полями (`expires_at` в `list`, `protocol` в `check`) и чистым stdout-контрактом `--json`.
 - **Зависимости .deb:** `python3`, `openssl`, `systemd`. Опционально `qrencode` (QR инсталлер генерит сам, панель только отдаёт `.png`).
 - **Порты:** `8443/tcp` (HTTPS) + `80/tcp` (редирект на HTTPS; выключается `http_redirect_port = 0`).
 - **Для сборки .deb:** `dpkg-deb`. Для dev-проверок: `python3` (тесты — только stdlib, без pip).
@@ -237,7 +238,7 @@ awg-control-pan/
 ├── src/awg_panel/
 │   ├── __init__.py      # версия (__version__)
 │   ├── __main__.py      # точка входа (python3 -m awg_panel)
-│   ├── server.py        # роуты, сессии, HTML, HTTP→HTTPS редиректор, /static/style.css + /static/copy.js
+│   ├── server.py        # роуты, сессии, HTML, HTTP→HTTPS редиректор, /static/style.css + /static/copy.js + /static/clients.js
 │   ├── manage.py        # обёртка manage --json (без shell, капы stdout/батча)
 │   ├── system_info.py   # /proc: cpu/mem/disk/uptime/load/net
 │   ├── auth.py          # пользователи [users], сессии в памяти, rate-limit, журнал
