@@ -26,8 +26,8 @@ sudo systemctl restart awg-panel
 | `auth_lock_minutes` | `5` | `1..1440` (clamp) | Время блокировки IP после исчерпания попыток. |
 | `session_ttl_min` | `30` | `1..1440` (clamp) | Sliding TTL. Абсолютный лимит сессии — 12 ч, захардкожен в `auth.py`. |
 | `manage_script` | `/root/awg/manage_amneziawg.sh` | путь | Underlay инсталлера. Менять только если инсталлер стоит нестандартно. |
-| `awg_dir` | `/root/awg` | путь | Каталог live-файлов клиентов (`*.conf`, `*.vpnuri`, `*.png`). |
-| `server_conf` | `/etc/amnezia/amneziawg/awg0.conf` | путь | Читается только через helper (`server-pubkeys`: имена + `PublicKey`). |
+| `awg_dir` | `/root/awg` | путь (зарезервирован, игнорируется) | Не используется: пути внутри helper захардкожены (`/root/awg`) ради allowlist — значение из конфига ни на что не влияет. |
+| `server_conf` | `/etc/amnezia/amneziawg/awg0.conf` | путь (зарезервирован, игнорируется) | Не используется: helper читает только свой захардкоженный `awg0.conf` (`server-pubkeys`: имена + `PublicKey`). |
 | `helper` | `/usr/sbin/awg-panel-helper` | путь | Исполняемый helper. Пути внутри helper захардкожены и игнорируют env. |
 | `auth_log` | `/var/log/awg-panel/auth.log` | путь | Журнал входов (`0600`, поля без `\r\n`). |
 

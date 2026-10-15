@@ -151,7 +151,8 @@ sudo apt purge awg-panel        # удалить всё: конфиг, ключ�
 | `auth_max_attempts` / `auth_lock_minutes` | `5` / `5` | Блок IP средствами сервиса (`1..100` / `1..1440`), без `iptables/ufw`. |
 | `session_ttl_min` | `30` | Sliding TTL сессии, `1..1440`. Абсолютный лимит — 12 ч (в коде). |
 | `manage_script` | `/root/awg/manage_amneziawg.sh` | Путь к underlay-скрипту. |
-| `server_conf` | `/etc/amnezia/amneziawg/awg0.conf` | Только для чтения префиксов публичных ключей. |
+| `awg_dir` | `/root/awg` | Зарезервирован, игнорируется: helper использует только захардкоженный путь. |
+| `server_conf` | `/etc/amnezia/amneziawg/awg0.conf` | Зарезервирован, игнорируется: helper читает только свой захардкоженный `awg0.conf` (имена + префиксы `PublicKey`). |
 | `helper` | `/usr/sbin/awg-panel-helper` | Безопасные чтения live-файлов. |
 | `auth_log` | `/var/log/awg-panel/auth.log` | Журнал входов (`600`, без переводов строк в полях). |
 
