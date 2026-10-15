@@ -728,10 +728,12 @@ class TestLoginPage(unittest.TestCase):
         self.assertIn("<nav></nav>", body)
         self.assertNotIn(">Система<", body)
         self.assertNotIn(">Клиенты<", body)
+        self.assertNotIn(">Справка<", body)
         self.assertNotIn(">Выход<", body)
         self.assertNotIn("/logout", body)
         self.assertNotIn("/clients", body)
         self.assertNotIn("/system", body)
+        self.assertNotIn("/help", body)
 
     def test_login_error_shown_without_nav(self):
         body = self._page("Неверный логин или пароль")
@@ -749,6 +751,8 @@ class TestLoginPage(unittest.TestCase):
         full = h._layout("T", "system", "b", "csrf")
         self.assertIn(">Система<", full)
         self.assertIn(">Клиенты<", full)
+        self.assertIn(">Справка<", full)
+        self.assertIn('href="/help"', full)
 
     def test_logout_pinned_to_bottom(self):
         from awg_panel import server as srv
@@ -1046,6 +1050,24 @@ class TestSystemPage(unittest.TestCase):
         h, _ = self._handler()
         actions = h._actions_block("t")
         self.assertIn("systemctl restart awg-quick@awg0", actions)
+
+
+class TestHelpPage(unittest.TestCase):
+    def test_help_github_block(self):
+        from types import SimpleNamespace
+        from awg_panel import server as srv
+        from awg_panel.config import PanelConfig
+        h = srv.Handler.__new__(srv.Handler)
+        h.cfg = PanelConfig()
+        h._sess = lambda: SimpleNamespace(csrf="t")
+        body = h._page_help()
+        self.assertIn("<h1>Справка</h1>", body)
+        self.assertIn("<h2>Github</h2>", body)
+        self.assertIn(srv.GITHUB_URL, body)
+        self.assertIn(srv.INSTALLER_URL, body)
+        self.assertIn("target=_blank", body)
+        # active nav is help
+        self.assertIn('href="/help" class="on"', body)
 
 
 if __name__ == "__main__":

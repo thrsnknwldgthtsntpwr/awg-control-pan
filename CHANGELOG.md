@@ -9,6 +9,7 @@
 
 - «Клиенты»: сортировка кликом по заголовкам — Имя, IP (числовая через `ipaddress`), Статус (ранг `active/recent/…`), RX/TX (сумма `rx+tx` из `stats`), Срок (бессрочные `None` = `inf`). Параметры `?sort=name|ip|status|traffic|expires&dir=asc|desc`, дефолт `name/asc`, тайбрейкер — имя.
 - «Система»: блок «Действия» — «Перезагрузить сервер» (`systemctl reboot` с задержкой 2с в daemon-потоке) и «Перезапустить awg» (`systemctl restart awg-quick@awg0`). Оба через GET-подтверждение («Перезагрузка сервера: Вы уверены?» / «Перезапуск AWG: Вы уверены?») + POST с CSRF, без инлайн-JS (CSP `script-src 'self'`, SSR).
+- «Справка» (`/help`): пункт меню + блок «Github» со ссылками на `awg-control-pan` и `amneziawg-installer` (новая вкладка).
 
 ### Changed
 
@@ -17,7 +18,7 @@
 - Тесты без sudoers-файла: allowlist helper проверяется кодом (`run_helper`).
 - Страница «Статус» переименована в «Система»: нав `Система (/system)`, вкладки убраны, всё на одной странице сверху вниз — Система → Интерфейсы → AWG → Действия → Журнал входов. Старый `/status` редиректит `303 → /system`, `/` и логин ведут на `/system`.
 - `manage.py`: новые `cmd_awg_restart()` / `cmd_reboot_host()` через фиксированный `systemctl` (direct от root, `sudo -n` fallback для dev). Helper allowlist не тронут (`reboot` по-прежнему `ValueError`).
-- Тесты: обновлены нав/редиректор на `/system`, добавлены `TestClientsSorting` (6 сортировок + заголовки-ссылки + порядок строк) и `TestSystemPage` (порядок блоков без табов, тексты подтверждений, `systemctl`-вызовы), всего 73/73 OK.
+- Тесты: обновлены нав/редиректор на `/system`, добавлены `TestClientsSorting` (6 сортировок + заголовки-ссылки + порядок строк) и `TestSystemPage` (порядок блоков без табов, тексты подтверждений, `systemctl`-вызовы), `TestHelpPage` (блок Github, обе ссылки, активный нав), всего 74/74 OK.
 
 ## [0.1.17] - 2026-10-14
 

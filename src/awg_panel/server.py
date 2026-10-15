@@ -37,6 +37,7 @@ CSS = '<link rel="stylesheet" href="/static/style.css">'
 
 # Project home: version in the sidebar links here (new tab).
 GITHUB_URL = "https://github.com/thrsnknwldgthtsntpwr/awg-control-pan"
+INSTALLER_URL = "https://github.com/bivlked/amneziawg-installer"
 
 # Cap form bodies to avoid OOM on huge POSTs.
 MAX_FORM_BYTES = 1 << 20  # 1 MiB
@@ -332,7 +333,8 @@ class Handler(BaseHTTPRequestHandler):
         nav_links = "".join(
             f'<a href="{href}" class="{"on" if active==k else ""}">{label}</a>'
             for k, href, label in (("system", "/system", "Система"),
-                                   ("clients", "/clients", "Клиенты")))
+                                   ("clients", "/clients", "Клиенты"),
+                                   ("help", "/help", "Справка")))
         if active == "logout" or csrf:
             logout = (f"<form method=post action=/logout class=navlogout>"
                       f"<input type=hidden name=csrf value='{e(csrf)}'>"
@@ -395,6 +397,18 @@ class Handler(BaseHTTPRequestHandler):
             f"<form method=post action=/logout><input type=hidden name=csrf value='{e(csrf)}'>"
             "<button>Выйти</button></form>"
             "<p><a href=/system>Остаться</a></p></div>", csrf)
+
+    def _page_help(self) -> str:
+        s = self._sess()
+        csrf = s.csrf if s else ""
+        body = (f"<h1>Справка</h1>"
+                f"<div class=card><h2>Github</h2><table>"
+                f"<tr><th>awg-control-pan</th>"
+                f"<td><a href='{e(GITHUB_URL)}' target=_blank rel=noopener>{e(GITHUB_URL)}</a></td></tr>"
+                f"<tr><th>amneziawg-installer</th>"
+                f"<td><a href='{e(INSTALLER_URL)}' target=_blank rel=noopener>{e(INSTALLER_URL)}</a></td></tr>"
+                f"</table></div>")
+        return self._layout("Справка", "help", body, csrf)
 
     def _system_block(self) -> str:
         try:
@@ -686,6 +700,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_auth(200, self._page_system_confirm("reboot"))
         if u.path == "/system/awg-restart":
             return self._send_auth(200, self._page_system_confirm("awg-restart"))
+        if u.path == "/help":
+            return self._send_auth(200, self._page_help())
         if u.path == "/clients":
             sort = (q.get("sort", ["name"])[0] or "name")
             direction = (q.get("dir", ["asc"])[0] or "asc")
