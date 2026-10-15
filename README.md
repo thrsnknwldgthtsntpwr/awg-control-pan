@@ -345,7 +345,7 @@ cat /var/log/awg-panel/auth.log
 
 - Кратко: [CHANGELOG.md](CHANGELOG.md).
 - Файлы: [GitHub Releases](https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases) (`.deb` прикладывает CI по тегу `v*`).
-- Старые неработоспособные релизы до `0.1.8` удалены; git-теги `v0.1.1–v0.1.18` оставлены (при нужде `.deb` пересоберёт CI).
+- Релизы до `0.1.18` удалены с GitHub; git-теги `v0.1.1–v0.1.18` оставлены (при нужде `.deb` пересоберёт CI).
 
 ---
 
