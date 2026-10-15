@@ -5,7 +5,7 @@
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
 ![Platform](https://img.shields.io/badge/platform-debian%20%7C%20ubuntu-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Version](https://img.shields.io/badge/version-0.1.18-blue)
+![Version](https://img.shields.io/badge/version-0.1.19-blue)
 
 Минималистичная веб-панель в стиле роутера поверх
 [bivlked/amneziawg-installer](https://github.com/bivlked/amneziawg-installer).
@@ -78,11 +78,11 @@
 На сервере, где уже стоит `amneziawg-installer`:
 
 ```bash
-# 1. Скачать .deb из Releases (например v0.1.18)
-wget https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases/download/v0.1.18/awg-panel_0.1.18_all.deb
+# 1. Скачать .deb из Releases (например v0.1.19)
+wget https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases/download/v0.1.19/awg-panel_0.1.19_all.deb
 
 # 2. Установить (именно dpkg — без предупреждения _apt о песочнице)
-sudo dpkg -i awg-panel_0.1.18_all.deb
+sudo dpkg -i awg-panel_0.1.19_all.deb
 
 # 3. Сменить пароль и открыть панель
 sudo awg-panel-set-password
@@ -252,7 +252,7 @@ awg-control-pan/
 │   ├── DEBIAN/control, conffiles, postinst, prerm, postrm
 │   ├── awg-panel.service        # systemd-юнит (User=root, см. SECURITY.md почему)
 │   ├── config.ini.example
-├── tests/test_panel.py  # unittest, только stdlib (77 тестов на 0.1.18)
+├── tests/test_panel.py  # unittest, только stdlib (77 тестов на 0.1.19)
 ├── build_deb.sh         # сборка .deb (root-owned, без pycache)
 ├── docs/                # INSTALL, CONFIGURATION, TROUBLESHOOTING, DEVELOPMENT (SECURITY.md — в корне)
 ├── .github/workflows/
@@ -288,14 +288,14 @@ awg-control-pan/
 # тесты (только stdlib, без pip/venv)
 python3 -m unittest discover -s tests -v
 
-# 77/77 OK на 0.1.18. Полный e2e — только на VPS с инсталлером
+# 77/77 OK на 0.1.19. Полный e2e — только на VPS с инсталлером
 # (нужны /root/awg/manage_amneziawg.sh и /etc/amnezia/.../awg0.conf)
 ```
 
 ```bash
 # локальная сборка .deb (нужен dpkg-deb; на Windows — в WSL)
-./build_deb.sh 0.1.18
-# → dist/awg-panel_0.1.18_all.deb
+./build_deb.sh 0.1.19
+# → dist/awg-panel_0.1.19_all.deb
 ```
 
 Детали кодстайла, тестов, релизного цикла — [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) и [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -346,7 +346,7 @@ cat /var/log/awg-panel/auth.log
 
 - Кратко: [CHANGELOG.md](CHANGELOG.md).
 - Файлы: [GitHub Releases](https://github.com/thrsnknwldgthtsntpwr/awg-control-pan/releases) (`.deb` прикладывает CI по тегу `v*`).
-- Релизы до `0.1.18` удалены с GitHub; git-теги `v0.1.1–v0.1.18` оставлены (при нужде `.deb` пересоберёт CI).
+- Релизы до `0.1.18` удалены с GitHub; git-теги `v0.1.1–v0.1.19` оставлены (при нужде `.deb` пересоберёт CI).
 
 ---
 
