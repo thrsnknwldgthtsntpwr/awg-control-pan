@@ -5,11 +5,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- «Клиенты»: сортировка кликом по заголовкам — Имя, IP (числовая через `ipaddress`), Статус (ранг `active/recent/…`), RX/TX (сумма `rx+tx` из `stats`), Срок (бессрочные `None` = `inf`). Параметры `?sort=name|ip|status|traffic|expires&dir=asc|desc`, дефолт `name/asc`, тайбрейкер — имя.
+- «Система»: блок «Действия» — «Перезагрузить сервер» (`systemctl reboot` с задержкой 2с в daemon-потоке) и «Перезапустить awg» (`systemctl restart awg-quick@awg0`). Оба через GET-подтверждение («Перезагрузка сервера: Вы уверены?» / «Перезапуск AWG: Вы уверены?») + POST с CSRF, без инлайн-JS (CSP `script-src 'self'`, SSR).
+
 ### Changed
 
 - Stable-чистка после `0.1.17`: удалён `packaging/sudoers` (в проде не использовался с `0.1.4`, сервис от root) + все упоминания (`conffiles`, `build_deb.sh`, `postinst`/`postrm`, `visudo`-проверки в CI).
 - Убраны миграционные шимы: `useradd/userdel awgpanel`, чистка `set-password-internal` + `/etc/awg-panel/password` в `postinst`, чистка `webusername/webpassword` в `awg-panel-set-password` (нужны были только для апгрейда с версий до `0.1.4` / до `0.1.12`).
-- Тесты без sudoers-файла: allowlist helper проверяется кодом (`run_helper`), всего 61/61 OK.
+- Тесты без sudoers-файла: allowlist helper проверяется кодом (`run_helper`).
+- Страница «Статус» переименована в «Система»: нав `Система (/system)`, вкладки убраны, всё на одной странице сверху вниз — Система → Интерфейсы → AWG → Действия → Журнал входов. Старый `/status` редиректит `303 → /system`, `/` и логин ведут на `/system`.
+- `manage.py`: новые `cmd_awg_restart()` / `cmd_reboot_host()` через фиксированный `systemctl` (direct от root, `sudo -n` fallback для dev). Helper allowlist не тронут (`reboot` по-прежнему `ValueError`).
+- Тесты: обновлены нав/редиректор на `/system`, добавлены `TestClientsSorting` (6 сортировок + заголовки-ссылки + порядок строк) и `TestSystemPage` (порядок блоков без табов, тексты подтверждений, `systemctl`-вызовы), всего 73/73 OK.
 
 ## [0.1.17] - 2026-10-14
 

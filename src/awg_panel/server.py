@@ -5,10 +5,12 @@ import concurrent.futures
 import datetime
 import hmac
 import html
+import ipaddress
 import re
 import ssl
 import sys
 import threading
+import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from http import cookies
@@ -17,7 +19,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from . import __version__
 from .auth import AuthStore
 from .config import PanelConfig
-from .manage import cmd_add, cmd_check, cmd_list, cmd_regen, cmd_remove, cmd_stats, run_helper
+from .manage import (
+    cmd_add,
+    cmd_awg_restart,
+    cmd_check,
+    cmd_list,
+    cmd_reboot_host,
+    cmd_regen,
+    cmd_remove,
+    cmd_stats,
+    run_helper,
+)
 from .system_info import cpu_pct, disk_usage, fmt_bytes, load_avg, mem_info, net_dev, uptime_str
 from .validate import expires_flag, parse_names, valid_client_name
 
@@ -75,6 +87,113 @@ def fmt_hs(hs) -> str:
         return datetime.datetime.fromtimestamp(ts).strftime("%d.%m.%Y %H:%M")
     except (ValueError, OverflowError, OSError):
         return "?"
+
+
+# ---------- clients sorting (0.1.18+) ----------
+# Sort keys for /clients?sort=<key>&dir=<asc|desc>.
+CLIENT_SORT_KEYS = ("name", "ip", "status", "traffic", "expires")
+
+# Status order: active first, errors/unknown last. Unknown codes -> 99.
+_STATUS_RANK = {
+    "active": 0,
+    "recent": 1,
+    "no_handshake": 2,
+    "inactive": 2,
+    "no_data": 3,
+    "key_error": 4,
+}
+
+
+def _ip_sort_key(ip) -> tuple:
+    s = str(ip or "").strip()
+    if not s or s in ("?", "-", "none"):
+        return (1, "")
+    try:
+        return (0, int(ipaddress.ip_address(s)))
+    except ValueError:
+        return (1, s.lower())
+
+
+def _status_rank(c: dict) -> int:
+    try:
+        code = str(c.get("status_code", "") or "").strip()
+    except Exception:
+        code = ""
+    return _STATUS_RANK.get(code, 99 if code else 99)
+
+
+def _traffic_total(name, stats_map: dict) -> int:
+    try:
+        s = stats_map.get(name)
+        if not isinstance(s, dict):
+            return 0
+        rx = s.get("rx", 0) or 0
+        tx = s.get("tx", 0) or 0
+        return int(rx) + int(tx)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _expires_key(c: dict):
+    exp = c.get("expires_at")
+    if exp is None:
+        return float("inf")
+    try:
+        return int(exp)
+    except (TypeError, ValueError):
+        return float("inf")
+
+
+def sort_clients(clients: list, stats_map: dict, sort: str = "name",
+                 direction: str = "asc") -> list:
+    """Sort clients list for /clients table. Invalid sort/dir -> name/asc.
+
+    Tiebreaker is always name asc (stable sort: name first, then primary).
+    """
+    if sort not in CLIENT_SORT_KEYS:
+        sort = "name"
+    reverse = direction == "desc"
+    items = [c for c in (clients or []) if isinstance(c, dict)]
+    # Tiebreaker: name asc first (stable sort keeps it for equal primaries).
+    items = sorted(items, key=lambda c: str(c.get("name", "") or "").lower())
+    if sort == "name":
+        if reverse:
+            items.reverse()
+        return items
+    if sort == "ip":
+        return sorted(items, key=lambda c: _ip_sort_key(c.get("ip")), reverse=reverse)
+    if sort == "status":
+        return sorted(items, key=lambda c: (_status_rank(c),
+                                            str(c.get("status", "") or "").lower(),
+                                            str(c.get("name", "") or "").lower()),
+                      reverse=reverse)
+    if sort == "traffic":
+        return sorted(items, key=lambda c: _traffic_total(c.get("name"), stats_map or {}),
+                      reverse=reverse)
+    if sort == "expires":
+        return sorted(items, key=lambda c: (_expires_key(c),
+                                            str(c.get("name", "") or "").lower()),
+                      reverse=reverse)
+    return items
+
+
+def _schedule_reboot(delay_sec: float = 2.0) -> None:
+    """Reboot the host after a short delay (lets the HTTP response flush).
+
+    Uses systemctl reboot via manage.cmd_reboot_host in a daemon thread:
+    reboot kills this process, so the caller must respond immediately.
+    """
+
+    def _do():
+        try:
+            time.sleep(delay_sec)
+            r = cmd_reboot_host()
+            if not r.ok:
+                sys.stderr.write(f"awg-panel: reboot failed rc={r.rc}: {(r.stderr or '')[-500:]}\n")
+        except Exception as ex:
+            sys.stderr.write(f"awg-panel: reboot thread failed: {ex}\n")
+
+    threading.Thread(target=_do, daemon=True, name="awg-reboot").start()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -212,7 +331,7 @@ class Handler(BaseHTTPRequestHandler):
     def _layout(self, title: str, active: str, body: str, csrf: str = "", nav: bool = True) -> str:
         nav_links = "".join(
             f'<a href="{href}" class="{"on" if active==k else ""}">{label}</a>'
-            for k, href, label in (("status", "/status", "Статус"),
+            for k, href, label in (("system", "/system", "Система"),
                                    ("clients", "/clients", "Клиенты")))
         if active == "logout" or csrf:
             logout = (f"<form method=post action=/logout class=navlogout>"
@@ -237,14 +356,36 @@ class Handler(BaseHTTPRequestHandler):
                            "<button>Войти</button></form>"
                            "<p class=muted>Доступ задаётся администратором сервера.</p></div>", nav=False)
 
-    def _page_status(self, tab: str) -> str:
+    def _page_system(self, msg="") -> str:
         s = self._sess()
         csrf = s.csrf if s else ""
-        tabs = (f"<div class=tabs><a href='/status?tab=server' class='{'on' if tab!='awg' else ''}'>Сервер</a>"
-                f"<a href='/status?tab=awg' class='{'on' if tab=='awg' else ''}'>AWG</a></div>")
-        if tab == "awg":
-            return self._layout("Статус AWG", "status", f"<h1>Статус</h1>{tabs}{self._awg_block()}", csrf)
-        return self._layout("Статус сервера", "status", f"<h1>Статус</h1>{tabs}{self._server_block()}", csrf)
+        m = f"<p class=ok>{e(msg)}</p>" if msg else ""
+        body = (f"<h1>Система</h1>{m}"
+                f"{self._system_block()}{self._interfaces_block()}"
+                f"{self._awg_block()}{self._actions_block(csrf)}"
+                f"{self._journal_block()}")
+        return self._layout("Система", "system", body, csrf)
+
+    def _page_system_confirm(self, kind: str) -> str:
+        s = self._sess()
+        csrf = s.csrf if s else ""
+        if kind == "reboot":
+            title = "Перезагрузка сервера"
+            text = "Перезагрузка сервера: Вы уверены?"
+            action = "/system/reboot"
+        else:
+            title = "Перезапуск AWG"
+            text = "Перезапуск AWG: Вы уверены?"
+            action = "/system/awg-restart"
+        return self._layout(title, "system",
+            "<div class=card style='max-width:520px'>"
+            f"<h1>{e(title)}</h1><p>{e(text)}</p>"
+            "<div class=row>"
+            f"<form method=post action={action}><input type=hidden name=csrf value='{e(csrf)}'>"
+            "<button>Подтвердить</button></form> "
+            "<a class=btn href=/system>Отмена</a></div>"
+            "<p class=muted>Подтверждение защищает от случайного нажатия. "
+            "Перезагрузка сервера разорвёт текущую сессию.</p></div>", csrf)
 
     def _page_logout(self) -> str:
         s = self._sess()
@@ -253,32 +394,44 @@ class Handler(BaseHTTPRequestHandler):
             "<div class=card style='max-width:420px'><h1>Выйти?</h1>"
             f"<form method=post action=/logout><input type=hidden name=csrf value='{e(csrf)}'>"
             "<button>Выйти</button></form>"
-            "<p><a href=/status>Остаться</a></p></div>", csrf)
+            "<p><a href=/system>Остаться</a></p></div>", csrf)
 
-    def _server_block(self) -> str:
+    def _system_block(self) -> str:
         try:
             mem = mem_info()
             la = load_avg()
             cpu = cpu_pct()
             disk = disk_usage("/")
-            nets = net_dev()
         except Exception as ex:
-            sys.stderr.write(f"awg-panel: status server block failed: {ex}\n")
+            sys.stderr.write(f"awg-panel: system block failed: {ex}\n")
             return "<div class=card><h2>Система</h2><p class=err>Не удалось прочитать состояние сервера.</p></div>"
-        net_rows = "".join(
-            f"<tr><td>{e(n['if'])}</td><td>{e(fmt_bytes(n['rx']))}</td><td>{e(fmt_bytes(n['tx']))}</td></tr>"
-            for n in nets) or "<tr><td colspan=3>нет данных</td></tr>"
-        return (f"<div class=grid>"
-                f"<div class=card><h2>Система</h2><table>"
+        return (f"<div class=card><h2>Система</h2><table>"
                 f"<tr><th>Uptime</th><td>{e(uptime_str())}</td></tr>"
                 f"<tr><th>Load</th><td>{e(la['l1'])} / {e(la['l5'])} / {e(la['l15'])} (CPU: {e(la['cpus'])})</td></tr>"
                 f"<tr><th>CPU</th><td>{'—' if cpu is None else f'{e(cpu)} %'}</td></tr>"
                 f"<tr><th>RAM</th><td>{e(fmt_bytes(mem['used_kb']*1024))} / {e(fmt_bytes(mem['total_kb']*1024))} ({e(mem['used_pct'])} %)</td></tr>"
                 f"<tr><th>Диск /</th><td>{e(fmt_bytes(disk['used']))} / {e(fmt_bytes(disk['total']))} ({e(disk['pct'])} %)</td></tr>"
-                f"</table><p class=muted>Источник: /proc (без выполнения manage).</p></div>"
-                f"<div class=card><h2>Интерфейсы</h2><table><tr><th>Iface</th><th>RX</th><th>TX</th></tr>{net_rows}</table>"
-                f"<p class=muted>Счётчики с загрузки (/proc/net/dev), не скорость.</p></div>"
-                f"</div>{self._journal_block()}")
+                f"</table><p class=muted>Источник: /proc (без выполнения manage).</p></div>")
+
+    def _interfaces_block(self) -> str:
+        try:
+            nets = net_dev()
+        except Exception as ex:
+            sys.stderr.write(f"awg-panel: interfaces block failed: {ex}\n")
+            return "<div class=card><h2>Интерфейсы</h2><p class=err>Не удалось прочитать интерфейсы.</p></div>"
+        net_rows = "".join(
+            f"<tr><td>{e(n['if'])}</td><td>{e(fmt_bytes(n['rx']))}</td><td>{e(fmt_bytes(n['tx']))}</td></tr>"
+            for n in nets) or "<tr><td colspan=3>нет данных</td></tr>"
+        return (f"<div class=card><h2>Интерфейсы</h2>"
+                f"<table><tr><th>Iface</th><th>RX</th><th>TX</th></tr>{net_rows}</table>"
+                f"<p class=muted>Счётчики с загрузки (/proc/net/dev), не скорость.</p></div>")
+
+    def _actions_block(self, csrf: str) -> str:
+        return ("<div class=card><h2>Действия</h2><div class=row>"
+                "<a class=btn href='/system/reboot'>Перезагрузить сервер</a> "
+                "<a class=btn href='/system/awg-restart'>Перезапустить awg</a></div>"
+                "<p class=muted>Оба действия требуют подтверждения. "
+                "Перезапуск awg = systemctl restart awg-quick@awg0.</p></div>")
 
     def _awg_block(self) -> str:
         try:
@@ -334,9 +487,24 @@ class Handler(BaseHTTPRequestHandler):
         rows = "".join(f"<tr><td>{e(l)}</td></tr>" for l in reversed(lines))
         return f"<div class=card><h2>Журнал входов (последние)</h2><table>{rows}</table></div>"
 
-    def _clients_table(self, clients: list, stats_map: dict, pubkeys: dict) -> str:
+    def _clients_table(self, clients: list, stats_map: dict, pubkeys: dict,
+                       sort: str = "name", direction: str = "asc") -> str:
+        if sort not in CLIENT_SORT_KEYS:
+            sort = "name"
+        if direction not in ("asc", "desc"):
+            direction = "asc"
+
+        def _link(field: str, label: str) -> str:
+            if sort == field:
+                ndir = "desc" if direction == "asc" else "asc"
+                arrow = " ▲" if direction == "asc" else " ▼"
+            else:
+                ndir = "asc"
+                arrow = ""
+            return f"<a href='/clients?sort={field}&dir={ndir}'>{label}{arrow}</a>"
+
         rows = []
-        for c in clients:
+        for c in sort_clients(clients, stats_map, sort, direction):
             if not isinstance(c, dict):
                 continue
             name = c.get("name", "?")
@@ -359,10 +527,15 @@ class Handler(BaseHTTPRequestHandler):
                 f"<td class={cls}>{e(st)}</td><td>{e(traf)}</td>"
                 f"<td>{e(fmt_exp(c.get('expires_at')))}</td></tr>")
         body = "".join(rows) or "<tr><td colspan=7>Клиентов нет</td></tr>"
-        return (f"<table><tr><th></th><th>Имя</th><th>IP</th><th>Ключ</th>"
-                f"<th>Статус</th><th>RX / TX</th><th>Срок</th></tr>{body}</table>")
+        return (f"<table><tr><th></th><th>{_link('name', 'Имя')}</th><th>{_link('ip', 'IP')}</th>"
+                f"<th>Ключ</th><th>{_link('status', 'Статус')}</th>"
+                f"<th>{_link('traffic', 'RX / TX')}</th><th>{_link('expires', 'Срок')}</th></tr>{body}</table>")
 
-    def _page_clients(self, msg="") -> str:
+    def _page_clients(self, msg="", sort="name", direction="asc") -> str:
+        if sort not in CLIENT_SORT_KEYS:
+            sort = "name"
+        if direction not in ("asc", "desc"):
+            direction = "asc"
         s = self._sess()
         csrf = s.csrf if s else ""
         # list/stats/helper run in parallel with an overall future timeout
@@ -400,7 +573,7 @@ class Handler(BaseHTTPRequestHandler):
         if not rl.ok:
             sys.stderr.write(f"awg-panel: manage list failed rc={rl.rc}: {(rl.stderr or '')[-500:]}\n")
             m += "<p class=err>Не удалось получить список клиентов. Подробности — в журнале сервиса.</p>"
-        tbl = self._clients_table(clients, stats_map, pubkeys)
+        tbl = self._clients_table(clients, stats_map, pubkeys, sort, direction)
         return self._layout("Клиенты", "clients",
             f"<h1>Клиенты <span class=muted>({len(clients)})</span></h1>{m}"
             "<div class=card>"
@@ -481,7 +654,7 @@ class Handler(BaseHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(u.query)
         if u.path in ("/",):
-            return self._redirect("/status")
+            return self._redirect("/system")
         if u.path == "/static/style.css":
             return self._send(200, STYLE_CSS, "text/css; charset=utf-8",
                               extra={"Cache-Control": "max-age=3600"}, no_store=False)
@@ -505,10 +678,22 @@ class Handler(BaseHTTPRequestHandler):
         if not s:
             return
         if u.path == "/status":
-            tab = (q.get("tab", ["server"])[0] or "server")
-            return self._send_auth(200, self._page_status(tab if tab in ("server", "awg") else "server"))
+            # Backward compat: old nav/URL renamed to /system (0.1.18+).
+            return self._redirect("/system")
+        if u.path == "/system":
+            return self._send_auth(200, self._page_system())
+        if u.path == "/system/reboot":
+            return self._send_auth(200, self._page_system_confirm("reboot"))
+        if u.path == "/system/awg-restart":
+            return self._send_auth(200, self._page_system_confirm("awg-restart"))
         if u.path == "/clients":
-            return self._send_auth(200, self._page_clients())
+            sort = (q.get("sort", ["name"])[0] or "name")
+            direction = (q.get("dir", ["asc"])[0] or "asc")
+            if sort not in CLIENT_SORT_KEYS:
+                sort = "name"
+            if direction not in ("asc", "desc"):
+                direction = "asc"
+            return self._send_auth(200, self._page_clients("", sort, direction))
         if u.path == "/client":
             return self._send_auth(200, self._page_client(q.get("name", [""])[0]))
         if u.path == "/client-qr":
@@ -574,7 +759,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.auth.note_ok(ip)
                 self.auth.journal(ip, user, True)
                 s = self.auth.create(ip, user)
-                return self._redirect("/status", self._set_session_cookie(s.sid))
+                return self._redirect("/system", self._set_session_cookie(s.sid))
             self.auth.note_fail(ip)
             self.auth.journal(ip, user, False, "bad credentials")
             return self._send(200, self._page_login("Неверный логин или пароль"))
@@ -595,6 +780,24 @@ class Handler(BaseHTTPRequestHandler):
             return self._redirect("/login", self._set_session_cookie(None))
         if not self._check_csrf(form):
             return self._send_auth(403, "bad csrf", "text/plain")
+
+        if u.path == "/system/reboot":
+            try:
+                _schedule_reboot()
+            except Exception as ex:
+                sys.stderr.write(f"awg-panel: schedule reboot failed: {ex}\n")
+                return self._send_auth(200, self._page_system("Не удалось запланировать перезагрузку."))
+            return self._send_auth(200, self._page_system("Перезагрузка сервера запланирована…"))
+        if u.path == "/system/awg-restart":
+            try:
+                r = cmd_awg_restart()
+            except Exception as ex:
+                sys.stderr.write(f"awg-panel: awg restart failed: {ex}\n")
+                return self._send_auth(200, self._page_system("Не удалось перезапустить AWG."))
+            if r.ok:
+                return self._send_auth(200, self._page_system("AWG перезапущен."))
+            sys.stderr.write(f"awg-panel: awg restart failed rc={r.rc}: {(r.stderr or '')[-500:]}\n")
+            return self._send_auth(200, self._page_system(f"Перезапуск AWG не выполнен (rc={r.rc})."))
 
         def sel_list() -> tuple[list[str], list[str]]:
             v = form.get("sel", [])
@@ -898,7 +1101,7 @@ nav a{display:block;color:#cbd5e1;text-decoration:none;padding:10px 20px}nav a.o
 nav{display:flex;flex-direction:column;flex:1}
 nav form.navlogout{margin:auto 0 0;padding:12px 0 0}nav form.navlogout:before{content:"";display:block;border-top:1px solid #374151;margin-bottom:12px}nav button.navlink{display:block;width:100%;text-align:left;background:none;border:0;color:#cbd5e1;padding:10px 20px;font:inherit;cursor:pointer;border-radius:0}nav button.navlink.on,nav button.navlink:hover{background:#374151;color:#fff}
 main{flex:1;padding:24px;max-width:1200px;min-width:0;overflow-x:hidden}h1{margin:0 0 16px;font-size:22px}.card{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:16px;min-width:0;max-width:100%}
-table{width:100%;border-collapse:collapse;background:#fff}th,td{border:1px solid #e2e8f0;padding:8px;text-align:left;font-size:13px}th{background:#f1f5f9}
+table{width:100%;border-collapse:collapse;background:#fff}th,td{border:1px solid #e2e8f0;padding:8px;text-align:left;font-size:13px}th{background:#f1f5f9}th a{color:inherit;text-decoration:none}th a:hover{text-decoration:underline}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.grid>*{min-width:0}.stack{display:flex;flex-direction:column;gap:16px}.stack>.card{margin-bottom:0}.row{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}.actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center}.actions form{margin:0}
 input{padding:8px;border:1px solid #cbd5e1;border-radius:6px}button,.btn{font:inherit;background:#e2e8f0;border:1px solid #cbd5e1;border-radius:6px;padding:8px 14px;cursor:pointer;text-decoration:none;color:#111;display:inline-block;vertical-align:middle}
 button:hover,.btn:hover{background:#cbd5e1}button:disabled{color:#9ca3af;cursor:not-allowed;background:#e2e8f0}button:disabled:hover{background:#e2e8f0}button.copied{color:#9ca3af}.tabs{margin-bottom:12px}.tabs a{padding:6px 14px;border:1px solid #cbd5e1;text-decoration:none;color:#111;background:#fff}.tabs a.on{background:#1f2937;color:#fff}

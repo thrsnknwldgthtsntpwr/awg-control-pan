@@ -726,12 +726,12 @@ class TestLoginPage(unittest.TestCase):
         self.assertIn("<aside>", body)
         self.assertIn("AWG Panel", body)
         self.assertIn("<nav></nav>", body)
-        self.assertNotIn(">Статус<", body)
+        self.assertNotIn(">Система<", body)
         self.assertNotIn(">Клиенты<", body)
         self.assertNotIn(">Выход<", body)
         self.assertNotIn("/logout", body)
         self.assertNotIn("/clients", body)
-        self.assertNotIn("/status", body)
+        self.assertNotIn("/system", body)
 
     def test_login_error_shown_without_nav(self):
         body = self._page("Неверный логин или пароль")
@@ -746,14 +746,14 @@ class TestLoginPage(unittest.TestCase):
     def test_nav_present_elsewhere(self):
         from awg_panel import server as srv
         h = srv.Handler.__new__(srv.Handler)
-        full = h._layout("T", "status", "b", "csrf")
-        self.assertIn(">Статус<", full)
+        full = h._layout("T", "system", "b", "csrf")
+        self.assertIn(">Система<", full)
         self.assertIn(">Клиенты<", full)
 
     def test_logout_pinned_to_bottom(self):
         from awg_panel import server as srv
         h = srv.Handler.__new__(srv.Handler)
-        body = h._layout("T", "status", "b", "csrf")
+        body = h._layout("T", "system", "b", "csrf")
         # «Выход» идёт последним в nav, CSS прижимает его к низу сайдбара
         self.assertLess(body.index("/clients"), body.index("navlogout"))
         self.assertIn("nav{display:flex", srv.STYLE_CSS)
@@ -783,8 +783,8 @@ class TestHttpRedirect(unittest.TestCase):
             build_https_redirect_url("10.129.110.110:80", "/", 8443),
             "https://10.129.110.110:8443/")
         self.assertEqual(
-            build_https_redirect_url("10.129.110.110", "/status?tab=awg", 8443),
-            "https://10.129.110.110:8443/status?tab=awg")
+            build_https_redirect_url("10.129.110.110", "/system", 8443),
+            "https://10.129.110.110:8443/system")
         # 443 не пишется в URL
         self.assertEqual(
             build_https_redirect_url("example.com:80", "/clients", 443),
@@ -844,12 +844,12 @@ class TestHttpRedirect(unittest.TestCase):
         try:
             time.sleep(0.3)
             c = http.client.HTTPConnection("127.0.0.1", rport, timeout=5)
-            c.request("GET", "/status?tab=awg", headers={"Host": "127.0.0.1"})
+            c.request("GET", "/system", headers={"Host": "127.0.0.1"})
             r = c.getresponse()
             r.read()
             self.assertEqual(r.status, 301)
             self.assertEqual(r.getheader("Location"),
-                             f"https://127.0.0.1:{hport}/status?tab=awg")
+                             f"https://127.0.0.1:{hport}/system")
             self.assertIsNone(r.getheader("Set-Cookie"))
             # POST тоже только редирект (тело в cleartext отбрасывается)
             c2 = http.client.HTTPConnection("127.0.0.1", rport, timeout=5)
@@ -875,6 +875,177 @@ class TestHttpRedirect(unittest.TestCase):
         self.assertIsNone(start_http_redirector(cfg))
         cfg2 = PanelConfig(host="127.0.0.1", port=8443, http_redirect_port=0)
         self.assertIsNone(start_http_redirector(cfg2))
+
+
+class TestClientsSorting(unittest.TestCase):
+    def test_sort_name(self):
+        from awg_panel.server import sort_clients
+        clients = [{"name": "bob"}, {"name": "Alice"}, {"name": "carol"}]
+        got = [c["name"] for c in sort_clients(clients, {}, "name", "asc")]
+        self.assertEqual(got, ["Alice", "bob", "carol"])
+        got_d = [c["name"] for c in sort_clients(clients, {}, "name", "desc")]
+        self.assertEqual(got_d, ["carol", "bob", "Alice"])
+
+    def test_sort_ip_numeric(self):
+        from awg_panel.server import sort_clients
+        clients = [{"name": "a", "ip": "10.0.0.10"},
+                   {"name": "b", "ip": "10.0.0.2"},
+                   {"name": "c", "ip": "?"}]
+        got = [c["name"] for c in sort_clients(clients, {}, "ip", "asc")]
+        self.assertEqual(got, ["b", "a", "c"])
+        got_d = [c["name"] for c in sort_clients(clients, {}, "ip", "desc")]
+        self.assertEqual(got_d, ["c", "a", "b"])
+
+    def test_sort_status_rank(self):
+        from awg_panel.server import sort_clients
+        clients = [{"name": "x", "status": "s", "status_code": "no_data"},
+                   {"name": "a", "status": "s", "status_code": "active"},
+                   {"name": "m", "status": "s", "status_code": "recent"}]
+        got = [c["name"] for c in sort_clients(clients, {}, "status", "asc")]
+        self.assertEqual(got, ["a", "m", "x"])
+
+    def test_sort_traffic_sum(self):
+        from awg_panel.server import sort_clients
+        clients = [{"name": "a"}, {"name": "b"}, {"name": "c"}]
+        stats = {"a": {"rx": 10, "tx": 5}, "b": {"rx": 100, "tx": 0}}
+        got = [c["name"] for c in sort_clients(clients, stats, "traffic", "asc")]
+        self.assertEqual(got, ["c", "a", "b"])
+        got_d = [c["name"] for c in sort_clients(clients, stats, "traffic", "desc")]
+        self.assertEqual(got_d, ["b", "a", "c"])
+
+    def test_sort_expires_inf_last(self):
+        from awg_panel.server import sort_clients
+        clients = [{"name": "inf", "expires_at": None},
+                   {"name": "old", "expires_at": 100},
+                   {"name": "new", "expires_at": 200}]
+        got = [c["name"] for c in sort_clients(clients, {}, "expires", "asc")]
+        self.assertEqual(got, ["old", "new", "inf"])
+
+    def test_sort_invalid_fallback(self):
+        from awg_panel.server import sort_clients
+        clients = [{"name": "b"}, {"name": "a"}]
+        got = [c["name"] for c in sort_clients(clients, {}, "bad", "bad")]
+        self.assertEqual(got, ["a", "b"])
+
+    def test_table_headers_are_sort_links(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        from awg_panel import server as srv
+        from awg_panel.config import PanelConfig
+        from awg_panel.manage import ManageResult
+        h = srv.Handler.__new__(srv.Handler)
+        h.cfg = PanelConfig()
+        clients = [{"name": "alice", "ip": "10.0.0.2", "status": "active",
+                    "status_code": "active", "expires_at": None}]
+        with mock.patch.object(srv.Handler, "_sess",
+                               lambda self: SimpleNamespace(csrf="t")), \
+             mock.patch.object(srv, "cmd_list", lambda ms: ManageResult(True, 0, clients, "")), \
+             mock.patch.object(srv, "cmd_stats", lambda ms: ManageResult(True, 0, [], "")), \
+             mock.patch.object(srv, "run_helper", lambda helper, *a, **k: (0, b"", "")):
+            body = h._page_clients("", "ip", "asc")
+        for field in ("sort=name", "sort=ip", "sort=status", "sort=traffic", "sort=expires"):
+            self.assertIn(field, body)
+        # active sort shows arrow and flips dir
+        self.assertIn("sort=ip&dir=desc", body)
+        self.assertIn("STYLE_CSS" if False else "th a{", srv.STYLE_CSS)
+
+    def test_table_rows_follow_sort(self):
+        from awg_panel.server import sort_clients
+        # end-to-end via _clients_table order: bob (.2) before alice (.10) on ip asc
+        from types import SimpleNamespace
+        from unittest import mock
+        from awg_panel import server as srv
+        from awg_panel.config import PanelConfig
+        from awg_panel.manage import ManageResult
+        h = srv.Handler.__new__(srv.Handler)
+        h.cfg = PanelConfig()
+        clients = [{"name": "alice", "ip": "10.0.0.10", "status": "active",
+                    "status_code": "active", "expires_at": None},
+                   {"name": "bob", "ip": "10.0.0.2", "status": "active",
+                    "status_code": "active", "expires_at": None}]
+        with mock.patch.object(srv.Handler, "_sess",
+                               lambda self: SimpleNamespace(csrf="t")), \
+             mock.patch.object(srv, "cmd_list", lambda ms: ManageResult(True, 0, clients, "")), \
+             mock.patch.object(srv, "cmd_stats", lambda ms: ManageResult(True, 0, [], "")), \
+             mock.patch.object(srv, "run_helper", lambda helper, *a, **k: (0, b"", "")):
+            body_ip = h._page_clients("", "ip", "asc")
+        self.assertLess(body_ip.index("bob"), body_ip.index("alice"))
+        _ = sort_clients  # keep import used
+
+
+class TestSystemPage(unittest.TestCase):
+    def _handler(self):
+        from types import SimpleNamespace
+        from awg_panel import server as srv
+        from awg_panel.config import PanelConfig
+        h = srv.Handler.__new__(srv.Handler)
+        h.cfg = PanelConfig()
+        h._sess = lambda: SimpleNamespace(csrf="t")
+        return h, srv
+
+    def test_blocks_order_no_tabs(self):
+        from unittest import mock
+        h, srv = self._handler()
+        with mock.patch.object(srv.Handler, "_awg_block",
+                               lambda self: "<div class=card><h2>AWG</h2></div>"), \
+             mock.patch.object(srv.Handler, "_system_block",
+                               lambda self: "<div class=card><h2>Система</h2></div>"), \
+             mock.patch.object(srv.Handler, "_interfaces_block",
+                               lambda self: "<div class=card><h2>Интерфейсы</h2></div>"), \
+             mock.patch.object(srv.Handler, "_journal_block",
+                               lambda self: "<div class=card><h2>Журнал входов</h2></div>"):
+            body = h._page_system()
+        self.assertNotIn("class=tabs", body)
+        self.assertNotIn("tab=awg", body)
+        i_sys = body.index("<h2>Система</h2>")
+        i_if = body.index("<h2>Интерфейсы</h2>")
+        i_awg = body.index("<h2>AWG</h2>")
+        i_act = body.index("Перезагрузить сервер")
+        i_jour = body.index("Журнал входов")
+        self.assertLess(i_sys, i_if)
+        self.assertLess(i_if, i_awg)
+        self.assertLess(i_awg, i_act)
+        self.assertLess(i_act, i_jour)
+        self.assertIn("Перезапустить awg", body)
+        self.assertIn("/system/reboot", body)
+        self.assertIn("/system/awg-restart", body)
+
+    def test_confirm_texts(self):
+        h, _ = self._handler()
+        reboot = h._page_system_confirm("reboot")
+        self.assertIn("Перезагрузка сервера: Вы уверены?", reboot)
+        self.assertIn("/system/reboot", reboot)
+        awg = h._page_system_confirm("awg-restart")
+        self.assertIn("Перезапуск AWG: Вы уверены?", awg)
+        self.assertIn("/system/awg-restart", awg)
+
+    def test_awg_restart_calls_systemctl(self):
+        import subprocess
+        from unittest import mock
+        from awg_panel import manage
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen["cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with mock.patch.object(manage, "_is_root", lambda: True), \
+             mock.patch.object(manage.subprocess, "run", fake_run):
+            r = manage.cmd_awg_restart()
+        self.assertTrue(r.ok)
+        self.assertIn("systemctl", seen["cmd"][0])
+        self.assertIn("awg-quick@awg0", seen["cmd"])
+
+    def test_reboot_uses_systemctl_not_helper(self):
+        from unittest import mock
+        from awg_panel import manage
+        from awg_panel import server as srv
+        # reboot must not appear in helper allowlist (stays rejected)
+        with self.assertRaises(ValueError):
+            manage.run_helper("/usr/sbin/awg-panel-helper", "reboot")
+        h, _ = self._handler()
+        actions = h._actions_block("t")
+        self.assertIn("systemctl restart awg-quick@awg0", actions)
 
 
 if __name__ == "__main__":

@@ -154,6 +154,45 @@ def _parse(p: "subprocess.CompletedProcess[str]") -> ManageResult:
     return _parse_json_output(p.stdout, p.returncode, p.stderr)
 
 
+def _systemctl_base() -> list[str]:
+    """systemctl argv prefix (direct as root, sudo fallback for dev)."""
+    ctl = "/usr/bin/systemctl"
+    for cand in ("/usr/bin/systemctl", "/bin/systemctl"):
+        try:
+            if os.path.isfile(cand):
+                ctl = cand
+                break
+        except Exception:
+            continue
+    if _is_root():
+        return [ctl]
+    return ["/usr/bin/sudo", "-n", ctl]
+
+
+def _run_systemctl(*args: str, timeout: int = 60) -> ManageResult:
+    """Run fixed systemctl commands (no user input, no shell)."""
+    cmd = _systemctl_base() + list(args)
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return ManageResult(False, 124, None, "timeout systemctl")
+    except OSError:
+        return ManageResult(False, 127, None, "cannot run systemctl")
+    ok = p.returncode == 0
+    return ManageResult(ok, p.returncode, None, (p.stderr or "")[-2000:])
+
+
+def cmd_awg_restart(timeout: int = 60) -> ManageResult:
+    """systemctl restart awg-quick@awg0 (panel stays up, VPN drops briefly)."""
+    return _run_systemctl("restart", "awg-quick@awg0", timeout=timeout)
+
+
+def cmd_reboot_host(timeout: int = 15) -> ManageResult:
+    """systemctl reboot (caller should respond first: reboot kills the server)."""
+    return _run_systemctl("reboot", timeout=timeout)
+
+
 def run_helper(helper: str, *args: str, timeout: int = 15) -> tuple[int, bytes, str]:
     """Call /usr/sbin/awg-panel-helper for safe file reads. Returns (rc, stdout_bytes, stderr).
 
