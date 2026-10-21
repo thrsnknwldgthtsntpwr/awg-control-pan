@@ -833,13 +833,16 @@ class TestLoginPage(unittest.TestCase):
         self.assertIn("top:0", aside_rule)
         self.assertIn("height:100vh", aside_rule)
 
-    def test_version_links_to_github(self):
+    def test_version_without_github_link(self):
         from awg_panel import __version__
-        from awg_panel.server import GITHUB_URL, STYLE_CSS
-        self.assertEqual(GITHUB_URL, "https://github.com/thrsnknwldgthtsntpwr/awg-control-pan")
-        body = self._page()
-        self.assertIn(f"<a href='{GITHUB_URL}' target=_blank rel=noopener>v{__version__}</a>", body)
-        self.assertIn(".brand small a{", STYLE_CSS)
+        from awg_panel import server as srv
+        # ссылка на github убрана: версия осталась, констант больше нет
+        self.assertFalse(hasattr(srv, "GITHUB_URL"))
+        self.assertFalse(hasattr(srv, "INSTALLER_URL"))
+        h = srv.Handler.__new__(srv.Handler)
+        full = h._layout("T", "system", "b", "csrf")
+        self.assertIn(f"v{__version__}", full)
+        self.assertNotIn("github.com", full)
 
 
 class TestHttpRedirect(unittest.TestCase):
@@ -1115,7 +1118,7 @@ class TestSystemPage(unittest.TestCase):
 
 
 class TestHelpPage(unittest.TestCase):
-    def test_help_github_block(self):
+    def test_help_no_github_links(self):
         from types import SimpleNamespace
         from awg_panel import server as srv
         from awg_panel.config import PanelConfig
@@ -1124,12 +1127,52 @@ class TestHelpPage(unittest.TestCase):
         h._sess = lambda: SimpleNamespace(csrf="t")
         body = h._page_help()
         self.assertIn("<h1>Справка</h1>", body)
-        self.assertIn("<h2>Github</h2>", body)
-        self.assertIn(srv.GITHUB_URL, body)
-        self.assertIn(srv.INSTALLER_URL, body)
-        self.assertIn("target=_blank", body)
-        # active nav is help
+        self.assertNotIn("github.com", body)
+        self.assertNotIn("amneziawg-installer", body)
+        # активная навигация — справка
         self.assertIn('href="/help" class="on"', body)
+
+
+class TestSupportPage(unittest.TestCase):
+    def test_support_page(self):
+        from types import SimpleNamespace
+        from awg_panel import server as srv
+        from awg_panel.config import PanelConfig
+        h = srv.Handler.__new__(srv.Handler)
+        h.cfg = PanelConfig()
+        h._sess = lambda: SimpleNamespace(csrf="t")
+        body = h._page_support()
+        self.assertIn("<h1>Поддержка</h1>", body)
+        self.assertIn("t.me/thrsnknwldgthtsntpwr", body)
+        self.assertIn('href="/support" class="on"', body)
+
+
+class TestPasswordPage(unittest.TestCase):
+    def _handler(self):
+        from types import SimpleNamespace
+        from awg_panel import server as srv
+        from awg_panel.config import PanelConfig
+        h = srv.Handler.__new__(srv.Handler)
+        h.cfg = PanelConfig()
+        h._sess = lambda: SimpleNamespace(csrf="t", username="admin")
+        return h, srv
+
+    def test_password_page_fields(self):
+        h, _ = self._handler()
+        body = h._page_password()
+        self.assertIn("<h1>Сменить пароль</h1>", body)
+        self.assertIn("name=old_password", body)
+        self.assertIn("name=new_password", body)
+        self.assertIn("name=new_password2", body)
+        self.assertIn(">Сменить пароль<", body)
+        self.assertIn('href="/system"', body)
+
+    def test_password_confirm_page(self):
+        h, _ = self._handler()
+        body = h._page_password_confirm()
+        self.assertIn(">Подтвердить<", body)
+        self.assertIn(">Отмена<", body)
+        self.assertIn("/password/confirm", body)
 
 
 if __name__ == "__main__":

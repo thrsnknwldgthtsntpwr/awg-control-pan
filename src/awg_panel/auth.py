@@ -21,6 +21,7 @@ class Session:
     expires: float
     ip: str
     username: str = ""
+    pending_pw: str | None = None
 
 
 @dataclass
