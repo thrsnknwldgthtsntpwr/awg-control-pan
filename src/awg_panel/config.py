@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import configparser
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,6 +41,7 @@ class PanelConfig:
     session_ttl_min: int = 30
     # Canonical user map: username -> password (from [users] only).
     users: dict = field(default_factory=dict, repr=False)
+    config_path: str = "/etc/awg-panel/config.ini"
     # Login rate-limit (app-level IP block, NOT iptables/ufw/nftables):
     # auth_max_attempts fails -> block IP for auth_lock_minutes.
     auth_max_attempts: int = 5
@@ -173,6 +175,7 @@ def load_config(path: str = "/etc/awg-panel/config.ini") -> PanelConfig:
     if len(users) > MAX_USERS:
         raise ValueError(f"config [users]: больше {MAX_USERS} пользователей")
     cfg.users = users
+    cfg.config_path = path
     return cfg
 
 
@@ -212,3 +215,49 @@ def _parse_client_names(cp: configparser.ConfigParser, cfg: PanelConfig) -> None
         rand_bytes = max_bytes
     cfg.client_name_prefix = prefix
     cfg.client_name_rand_bytes = rand_bytes
+
+
+def update_user_password(config_path: str, username: str, new_password: str) -> None:
+    """Записать новый пароль пользователя в password.N секции [users] config.ini.
+
+    Точечно заменяет только строку password.N, не трогая остальное содержимое
+    файла. После записи права на файл ставятся 0o600 (как у оригинального
+    конфига). Вызывает ValueError, если пользователь не найден.
+    """
+    _user_re = re.compile(r"^user\.(\d+)\s*=\s*" + re.escape(username) + r"\s*$")
+    _pass_re = re.compile(r"^password\.(\d+)\s*=")
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    target_idx: int | None = None
+    for line in lines:
+        m = _user_re.match(line.strip())
+        if m:
+            target_idx = int(m.group(1))
+            break
+    if target_idx is None:
+        raise ValueError(f"пользователь {username!r} не найден в секции [users]")
+
+    replaced = False
+    for i, line in enumerate(lines):
+        m = _pass_re.match(line.strip())
+        if m and int(m.group(1)) == target_idx:
+            lines[i] = f"password.{target_idx} = {new_password}\n"
+            replaced = True
+            break
+
+    if not replaced:
+        # password.N отсутствует — добавляем сразу после user.N
+        for i, line in enumerate(lines):
+            if line.strip() == f"user.{target_idx} = {username}":
+                lines.insert(i + 1, f"password.{target_idx} = {new_password}\n")
+                replaced = True
+                break
+
+    if not replaced:
+        raise ValueError(f"не удалось найти password.{target_idx} для записи")
+
+    with open(config_path, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+    os.chmod(config_path, 0o600)

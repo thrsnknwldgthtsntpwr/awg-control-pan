@@ -189,6 +189,40 @@ class TestConfig(unittest.TestCase):
         with self.assertRaises(ValueError):
             load_config(path2)
 
+    def test_update_user_password(self):
+        import os, tempfile
+        from awg_panel.config import update_user_password, load_config
+        content = (
+            "[server]\nhost = 0.0.0.0\n\n"
+            "[users]\nuser.1 = admin\npassword.1 = oldpass\n"
+            "user.2 = guest\npassword.2 = guestpass\n"
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".ini", delete=False,
+                                         encoding="utf-8") as f:
+            f.write(content)
+            path = f.name
+        try:
+            update_user_password(path, "admin", "newpass123")
+            cfg = load_config(path)
+            self.assertEqual(cfg.users["admin"], "newpass123")
+            self.assertEqual(cfg.users["guest"], "guestpass")
+        finally:
+            os.unlink(path)
+
+    def test_update_user_password_not_found(self):
+        import os, tempfile
+        from awg_panel.config import update_user_password
+        content = "[users]\nuser.1 = admin\npassword.1 = oldpass\n"
+        with tempfile.NamedTemporaryFile("w", suffix=".ini", delete=False,
+                                         encoding="utf-8") as f:
+            f.write(content)
+            path = f.name
+        try:
+            with self.assertRaises(ValueError):
+                update_user_password(path, "nobody", "pw")
+        finally:
+            os.unlink(path)
+
     def test_auth_limits(self):
         import tempfile
         from awg_panel.config import load_config

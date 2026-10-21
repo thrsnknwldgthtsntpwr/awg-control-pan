@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import __version__
 from .auth import AuthStore
-from .config import PanelConfig
+from .config import PanelConfig, update_user_password
 from .manage import (
     cmd_add,
     cmd_awg_restart,
@@ -989,6 +989,14 @@ class Handler(BaseHTTPRequestHandler):
             if not pw:
                 return self._send_auth(200, self._page_password(
                     "Сессия истекла, начните смену пароля заново"))
+            # Сначала сохраняем в конфиг, потом в память — при ошибке записи
+            # пароль нигде не меняется.
+            try:
+                update_user_password(self.cfg.config_path, s.username, pw)
+            except Exception as ex:
+                sys.stderr.write(f"awg-panel: persist password failed: {ex}\n")
+                return self._send_auth(200, self._page_password(
+                    f"Не удалось сохранить пароль в конфиг: {e(ex)}"))
             self.auth.users[s.username] = pw
             s.pending_pw = None
             self.auth.journal(ip, s.username, True, "password changed")
