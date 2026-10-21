@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import base64
 import datetime
 import hmac
 import html
@@ -429,33 +430,17 @@ class Handler(BaseHTTPRequestHandler):
     def _page_help(self) -> str:
         s = self._sess()
         csrf = s.csrf if s else ""
-        faq_items = (
-            ("Как добавить пользователя",
-             "В разделе «Клиенты» введите имена клиентов через пробел или запятую, укажите срок в днях (пусто = бессрочно) и нажмите «Добавить». "
-             "После создания на странице клиента можно скачать .conf, получить VPN-URI или QR-код."),
-            ("Как сменить пароль учётной записи",
-             "В сайдбаре нажмите «Сменить пароль». Введите текущий (старый) пароль, дважды введите новый пароль и нажмите «Сменить пароль». "
-             "На странице подтверждения нажмите «Подтвердить». Новый пароль сохранится в конфиге панели и будет действовать после перезапуска сервиса."),
-            ("Как перезагрузить сервер",
-             "Перейдите в раздел «Система», нажмите кнопку «Перезагрузить сервер» и подтвердите действие на следующей странице. "
-             "Сессия будет разорвана — войдите снова после перезагрузки."),
-            ("Как перезапустить AWG",
-             "В разделе «Система» нажмите «Перезапустить awg» и подтвердите. Это выполнит перезапуск сервиса awg-quick@awg0. Клиенты не отключатся надолго."),
-            ("Как удалить пользователя",
-             "В разделе «Клиенты» отметьте галочкой нужного или несколько клиентов, нажмите «Удалить выбранные» и подтвердите удаление. "
-             "Конфиги и QR выбранных клиентов будут удалены безвозвратно."),
-            ("Как получить конфиг или QR-код клиента",
-             "В разделе «Клиенты» нажмите на имя клиента. На его странице доступны кнопки «Скачать .conf», «QR.png» и копирование vpn:// URI."),
-            ("Как связаться с поддержкой",
-             "В сайдбаре нажмите «Поддержка» — откроется ссылка на Telegram t.me/thrsnknwldgthtsntpwr. "
-             "Опишите проблему и укажите версию панели (см. левый верхний угол)."),
-        )
-        blocks = "".join(
-            f"<details><summary>{e(q)}</summary><div class=faq-answer>{a}</div></details>"
-            for q, a in faq_items
-        )
-        body = (f"<h1>Справка</h1>"
-                f"<div class=card>{blocks}</div>")
+        body = ("<h1>Справка</h1>"
+                "<div class=card><p class=muted>В коммерческой версии внешние ссылки удалены. "
+                "По вопросам работы панели — раздел «Поддержка».</p></div>"
+                "<div class=stack>"
+                "<div class=card>"
+                "<h2>«Подробнее» по теме</h2>"
+                "<p class=muted>Выберите раздел справочной системы:</p>"
+                "<div class=row>"
+                "<a class=btn href='/faq' style='flex:1'>FAQ по панели управления</a> "
+                "<a class=btn href='/instructions' style='flex:1'>Инструкции для пользователей</a>"
+                "</div></div></div>")
         return self._layout("Справка", "help", body, csrf)
 
     def _page_support(self) -> str:
@@ -468,6 +453,117 @@ class Handler(BaseHTTPRequestHandler):
                 "t.me/thrsnknwldgthtsntpwr</a></p>"
                 "<p class=muted>Открывается в новой вкладке Telegram.</p></div>")
         return self._layout("Поддержка", "support", body, csrf)
+
+    def _page_faq(self) -> str:
+        s = self._sess()
+        csrf = s.csrf if s else ""
+        ICON_ADD = ('<svg width=16 height=16 viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px">'
+                    '<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>'
+                    '<circle cx="8.5" cy="7" r="4"></circle><line x1="20" y1="8" x2="20" y2="14"></line>'
+                    '<line x1="16" y1="20" x2="16" y2="20"></line></svg>')
+        ICON_KEY = ('<svg width=16 height=16 viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px">'
+                    '<path d="M21 2l-2 2m-7 7 7-7m-7 7l-2.93 2.93a1 1 0 0 1-1.41 0l-1.42-1.42a1 1 0 0 1 0-1.41l2.93-2.93a1 1 0 0 1 1.41 0l1.42 1.42a1 1 0 0 1 0 1.41z"></path>'
+                    '<path d="M3 11l2 2m7.77 1.74L13 11.5l-1.42-1.42a1 1 0 0 1 0-1.41l2.93-2.93a1 1 0 0 1 1.41 0l1.42 1.42a1 1 0 0 1 0 1.41z"></path>'
+                    '<path d="M12 12l2.93-2.93a1 1 0 0 1 1.41 0l1.42 1.42a1 1 0 0 1 0 1.41z"></path></svg>')
+        ICON_POWER = ('<svg width=16 height=16 viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                      'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px">'
+                      '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>'
+                      '<line x1="12" y1="19" x2="12" y2="23"></line><line x1="12" y1="14" x2="12" y2="18"></line></svg>')
+        ICON_REFRESH = ('<svg width=16 height=16 viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px">'
+                        '<path d="M1 4v6h6"></path><path d="M23 20v-6h-6"></path>'
+                        '<path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"></path></svg>')
+        ICON_DELETE = ('<svg width=16 height=16 viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                       'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px">'
+                       '<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>')
+        ICON_ROTATE = ('<svg width=16 height=16 viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                       'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px">'
+                       '<path d="M12 2a10 10 0 0 0-9 9v4a9 9 0 0 0 9 9h4a9 9 0 0 0 9-9v-4a9 9 0 0 0-9-9z"></path>'
+                       '<circle cx="12" cy="12" r="3"></circle></svg>')
+        faq_items = (
+            ("Как добавить пользователя", ICON_ADD,
+             "<p>Перейдите в раздел <b>Клиенты</b> → нажмите <b>Добавить</b> → укажите имена клиентов через пробел или запятую (например <i>ivan petr maria</i>) → при необходимости укажите срок действия в днях (пусто — бессрочно) → нажмите кнопку <b>Добавить</b>.</p>"
+             "<p>После добавления клиент появится в таблице. Нажмите на его имя, чтобы скачать .conf, QR-код или получить vpn:// URI для импорта в приложение.</p>"),
+            ("Как сменить пароль учётной записи", ICON_KEY,
+             "<p>Перейдите в раздел <b>Сменить пароль</b> (последний пункт в боковом меню).</p>"
+             "<p>Введите <b>старый пароль</b>, затем <b>новый пароль</b> и повторите его в поле <b>Новый пароль ещё раз</b>. Нажмите кнопку <b>Сменить пароль</b>.</p>"
+             "<p>Появится окно подтверждения — нажмите <b>Подтвердить</b>. Пароль будет изменён для вашей текущей учётной записи и сохранён в конфиге сервера.</p>"),
+            ("Как перезагрузить сервер", ICON_POWER,
+             "<p>Перейдите в раздел <b>Система</b> → в блоке «Действия» нажмите ссылку <b>Перезагрузить сервер</b>.</p>"
+             "<p>Появится окно подтверждения. Нажмите <b>Подтвердить</b>. Перезагрузка разорвёт текущую сессию, после чего потребуется войти повторно.</p>"),
+            ("Как перезапустить AWG", ICON_REFRESH,
+             "<p>Перейдите в раздел <b>Система</b> → в блоке «Действия» нажмите ссылку <b>Перезапустить awg</b>.</p>"
+             "<p>Появится окно подтверждения. Нажмите <b>Подтвердить</b>. Выполняется команда systemctl restart awg-quick@awg0.</p>"),
+            ("Как удалить клиента", ICON_DELETE,
+             "<p>Перейдите в раздел <b>Клиенты</b> → поставьте галочку напротив имени клиента (или нескольких) → нажмите кнопку <b>Удалить выбранные</b>.</p>"
+             "<p>Подтвердите удаление в появившемся окне. Конфиг и QR-код клиента будут удалены без возможности восстановления.</p>"),
+            ("Как пересоздать ключи клиента (regen)", ICON_ROTATE,
+             "<p>Откройте карточку клиента (раздел <b>Клиенты</b> → нажмите на имя) → нажмите кнопку <b>Пересоздать</b>.</p>"
+             "<p>Новый ключ и конфиг будут сгенерированы. Старый конфиг клиента перестанет работать — обновите его в приложении.</p>"),
+        )
+        blocks = ""
+        for title, icon, content in faq_items:
+            blocks += (
+                "<details class=faq style='margin-bottom:12px;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden'>"
+                "<summary style='padding:10px 14px;cursor:pointer;background:#f8fafc;font-weight:600'>" + icon + title + "</summary>"
+                "<div style='padding:12px 16px'>" + content + "</div>"
+                "</details>"
+            )
+        body = ("<h1>FAQ по панели управления</h1>"
+                "<div class=card>" + blocks + "</div>")
+        return self._layout("FAQ", "faq", body, csrf)
+
+    def _page_instructions(self) -> str:
+        s = self._sess()
+        csrf = s.csrf if s else ""
+        ICON_VPN = ('<svg width=16 height=16 viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px">'
+                    '<path d="M3 10h18M3 10l1.333-4A1 1 0 0 1 5.333 4H18.667a1 1 0 0 1 1.002 2l-1.333 4A1 1 0 0 1 18.333 18H5.667a1 1 0 0 1-1-2z"></path>'
+                    '<path d="M9 10l3 3-1 1m0 0l3 3m-3-3V10"></path></svg>')
+        ICON_PHONE = ('<svg width=16 height=16 viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                      'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px">'
+                      '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.8 19.8 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 0 7l.01.16"></path></svg>')
+        ICON_APPLE = ('<svg width=16 height=16 viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                      'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px">'
+                      '<path d="M17.5 19c0 1.1-1.1 2-2.5 2S12.5 20.1 12.5 19c0-1.1 1.1-2 2.5-2s2.5 0.9 2.5 2z"></path>'
+                      '<path d="M12 7c-1.7 0-3 1.3-3 2.9 0 1.6 1.3 2.9 3 2.9s3-1.3 3-2.9c0-1.6-1.3-2.9-3-2.9z"></path></svg>')
+        body = ("<h1>Инструкции для пользователей</h1>"
+                "<div class=card>"
+                "<p>Выберите приложение, в которое нужно импортировать ключ AWG:</p>"
+                "<details class=acc style='margin-bottom:10px;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden'>"
+                "<summary style='padding:10px 14px;cursor:pointer;background:#f8fafc;font-weight:600'>" + ICON_VPN + "AmneziaVPN</summary>"
+                "<div style='padding:12px 16px'>"
+                "<div class=row>"
+                "<a class=btn style='flex:1'>Windows</a> "
+                "<a class=btn style='flex:1'>Android</a> "
+                "<a class=btn style='flex:1'>iOS</a>"
+                "</div>"
+                "<p class=muted style='margin-top:10px'>Импортируйте .conf или отсканируйте QR-код клиента в приложении AmneziaVPN.</p>"
+                "</div></details>"
+                "<details class=acc style='margin-bottom:10px;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden'>"
+                "<summary style='padding:10px 14px;cursor:pointer;background:#f8fafc;font-weight:600'>" + ICON_VPN + "AmneziaWG</summary>"
+                "<div style='padding:12px 16px'>"
+                "<div class=row>"
+                "<a class=btn style='flex:1'>Windows</a> "
+                "<a class=btn style='flex:1'>Android</a> "
+                "<a class=btn style='flex:1'>iOS</a>"
+                "</div>"
+                "<p class=muted style='margin-top:10px'>Импортируйте .conf или отсканируйте QR-код клиента в приложении AmneziaWG.</p>"
+                "</div></details>"
+                "<details class=acc style='margin-bottom:10px;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden'>"
+                "<summary style='padding:10px 14px;cursor:pointer;background:#f8fafc;font-weight:600'>" + ICON_VPN + "DefaultVPN</summary>"
+                "<div style='padding:12px 16px'>"
+                "<div class=row>"
+                "<a class=btn style='flex:1'>Windows</a> "
+                "<a class=btn style='flex:1'>Android</a> "
+                "<a class=btn style='flex:1'>iOS</a>"
+                "</div>"
+                "<p class=muted style='margin-top:10px'>Импортируйте .conf или отсканируйте QR-код клиента в приложении DefaultVPN.</p>"
+                "</div></details>"
+                "</div>")
+        return self._layout("Инструкции", "instructions", body, csrf)
 
     def _system_block(self) -> str:
         try:
@@ -779,6 +875,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_auth(200, self._page_system_confirm("awg-restart"))
         if u.path == "/help":
             return self._send_auth(200, self._page_help())
+        if u.path == "/faq":
+            return self._send_auth(200, self._page_faq())
+        if u.path == "/instructions":
+            return self._send_auth(200, self._page_instructions())
         if u.path == "/support":
             return self._send_auth(200, self._page_support())
         if u.path == "/password":
@@ -1258,7 +1358,6 @@ button:hover,.btn:hover{background:#cbd5e1}button:disabled{color:#9ca3af;cursor:
 pre{background:#0f172a;color:#e2e8f0;padding:12px;border-radius:6px;overflow:auto;max-width:100%;font-size:12px}pre.wrap{white-space:pre-wrap;word-break:break-all}
 img{max-width:100%}
 label{display:block;margin:8px 0}input[name=user],input[name=password],input[name=names],input[name=old_password],input[name=new_password],input[name=new_password2]{width:100%}
-details{border:1px solid #e2e8f0;border-radius:6px;margin:10px 0;overflow:hidden}details summary{background:#f1f5f9;padding:10px 14px;cursor:pointer;font-weight:600;outline:none}details summary:hover{background:#e2e8f0}details[open] summary{border-bottom:1px solid #e2e8f0;border-radius:6px 6px 0 0}.faq-answer{padding:10px 14px;font-size:13px;line-height:1.5;color:#334155}
 @media(max-width:800px){aside{width:150px}}
 """
 

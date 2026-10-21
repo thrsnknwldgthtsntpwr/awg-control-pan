@@ -1165,6 +1165,9 @@ class TestHelpPage(unittest.TestCase):
         self.assertNotIn("amneziawg-installer", body)
         # активная навигация — справка
         self.assertIn('href="/help" class="on"', body)
+        # ссылки на разделы справочной системы
+        self.assertIn("href='/faq'", body)
+        self.assertIn("href='/instructions'", body)
 
 
 class TestSupportPage(unittest.TestCase):
@@ -1207,6 +1210,48 @@ class TestPasswordPage(unittest.TestCase):
         self.assertIn(">Подтвердить<", body)
         self.assertIn(">Отмена<", body)
         self.assertIn("/password/confirm", body)
+
+
+class TestFAQPage(unittest.TestCase):
+    def test_faq_page(self):
+        from types import SimpleNamespace
+        from awg_panel import server as srv
+        from awg_panel.config import PanelConfig
+        h = srv.Handler.__new__(srv.Handler)
+        h.cfg = PanelConfig()
+        h._sess = lambda: SimpleNamespace(csrf="t")
+        body = h._page_faq()
+        self.assertIn("<h1>FAQ по панели управления</h1>", body)
+        self.assertIn("Как добавить пользователя", body)
+        self.assertIn("Как сменить пароль учётной записи", body)
+        self.assertIn("Как перезагрузить сервер", body)
+        self.assertIn("Как перезапустить AWG", body)
+        self.assertIn("Как удалить клиента", body)
+        self.assertIn("Как пересоздать ключи клиента (regen)", body)
+        # аккордеон: details/summary
+        self.assertIn("<details class=faq", body)
+        self.assertIn("<summary", body)
+
+
+class TestInstructionsPage(unittest.TestCase):
+    def test_instructions_page(self):
+        from types import SimpleNamespace
+        from awg_panel import server as srv
+        from awg_panel.config import PanelConfig
+        h = srv.Handler.__new__(srv.Handler)
+        h.cfg = PanelConfig()
+        h._sess = lambda: SimpleNamespace(csrf="t")
+        body = h._page_instructions()
+        self.assertIn("<h1>Инструкции для пользователей</h1>", body)
+        self.assertIn("AmneziaVPN", body)
+        self.assertIn("AmneziaWG", body)
+        self.assertIn("DefaultVPN", body)
+        self.assertIn("Windows", body)
+        self.assertIn("Android", body)
+        self.assertIn("iOS", body)
+        # аккордеон: details/summary
+        self.assertIn("<details class=acc", body)
+        self.assertIn("<summary", body)
 
 
 if __name__ == "__main__":
