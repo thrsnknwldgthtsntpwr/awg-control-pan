@@ -429,9 +429,33 @@ class Handler(BaseHTTPRequestHandler):
     def _page_help(self) -> str:
         s = self._sess()
         csrf = s.csrf if s else ""
-        body = ("<h1>Справка</h1>"
-                "<div class=card><p class=muted>В коммерческой версии внешние ссылки удалены. "
-                "По вопросам работы панели — раздел «Поддержка».</p></div>")
+        faq_items = (
+            ("Как добавить пользователя",
+             "В разделе «Клиенты» введите имена клиентов через пробел или запятую, укажите срок в днях (пусто = бессрочно) и нажмите «Добавить». "
+             "После создания на странице клиента можно скачать .conf, получить VPN-URI или QR-код."),
+            ("Как сменить пароль учётной записи",
+             "В сайдбаре нажмите «Сменить пароль». Введите текущий (старый) пароль, дважды введите новый пароль и нажмите «Сменить пароль». "
+             "На странице подтверждения нажмите «Подтвердить». Новый пароль сохранится в конфиге панели и будет действовать после перезапуска сервиса."),
+            ("Как перезагрузить сервер",
+             "Перейдите в раздел «Система», нажмите кнопку «Перезагрузить сервер» и подтвердите действие на следующей странице. "
+             "Сессия будет разорвана — войдите снова после перезагрузки."),
+            ("Как перезапустить AWG",
+             "В разделе «Система» нажмите «Перезапустить awg» и подтвердите. Это выполнит перезапуск сервиса awg-quick@awg0. Клиенты не отключатся надолго."),
+            ("Как удалить пользователя",
+             "В разделе «Клиенты» отметьте галочкой нужного или несколько клиентов, нажмите «Удалить выбранные» и подтвердите удаление. "
+             "Конфиги и QR выбранных клиентов будут удалены безвозвратно."),
+            ("Как получить конфиг или QR-код клиента",
+             "В разделе «Клиенты» нажмите на имя клиента. На его странице доступны кнопки «Скачать .conf», «QR.png» и копирование vpn:// URI."),
+            ("Как связаться с поддержкой",
+             "В сайдбаре нажмите «Поддержка» — откроется ссылка на Telegram t.me/thrsnknwldgthtsntpwr. "
+             "Опишите проблему и укажите версию панели (см. левый верхний угол)."),
+        )
+        blocks = "".join(
+            f"<details><summary>{e(q)}</summary><div class=faq-answer>{a}</div></details>"
+            for q, a in faq_items
+        )
+        body = (f"<h1>Справка</h1>"
+                f"<div class=card>{blocks}</div>")
         return self._layout("Справка", "help", body, csrf)
 
     def _page_support(self) -> str:
@@ -1234,6 +1258,7 @@ button:hover,.btn:hover{background:#cbd5e1}button:disabled{color:#9ca3af;cursor:
 pre{background:#0f172a;color:#e2e8f0;padding:12px;border-radius:6px;overflow:auto;max-width:100%;font-size:12px}pre.wrap{white-space:pre-wrap;word-break:break-all}
 img{max-width:100%}
 label{display:block;margin:8px 0}input[name=user],input[name=password],input[name=names],input[name=old_password],input[name=new_password],input[name=new_password2]{width:100%}
+details{border:1px solid #e2e8f0;border-radius:6px;margin:10px 0;overflow:hidden}details summary{background:#f1f5f9;padding:10px 14px;cursor:pointer;font-weight:600;outline:none}details summary:hover{background:#e2e8f0}details[open] summary{border-bottom:1px solid #e2e8f0;border-radius:6px 6px 0 0}.faq-answer{padding:10px 14px;font-size:13px;line-height:1.5;color:#334155}
 @media(max-width:800px){aside{width:150px}}
 """
 
