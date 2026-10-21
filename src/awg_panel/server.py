@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import __version__
 from .auth import AuthStore
-from .config import PanelConfig
+from .config import PanelConfig, update_user_password
 from .manage import (
     cmd_add,
     cmd_awg_restart,
@@ -334,7 +334,8 @@ class Handler(BaseHTTPRequestHandler):
             f'<a href="{href}" class="{"on" if active==k else ""}">{label}</a>'
             for k, href, label in (("system", "/system", "Система"),
                                    ("clients", "/clients", "Клиенты"),
-                                   ("help", "/help", "Справка")))
+                                   ("help", "/help", "Справка"),
+                                   ("password", "/password", "Сменить пароль")))
         if active == "logout" or csrf:
             logout = (f"<form method=post action=/logout class=navlogout>"
                       f"<input type=hidden name=csrf value='{e(csrf)}'>"
@@ -397,6 +398,37 @@ class Handler(BaseHTTPRequestHandler):
             f"<form method=post action=/logout><input type=hidden name=csrf value='{e(csrf)}'>"
             "<button>Выйти</button></form>"
             "<p><a href=/system>Остаться</a></p></div>", csrf)
+
+    def _page_password(self, err="") -> str:
+        s = self._sess()
+        csrf = s.csrf if s else ""
+        msg = f'<p class=err>{e(err)}</p>' if err else ""
+        body = (f"<h1>Сменить пароль</h1>{msg}"
+                "<div class=card style='max-width:420px'>"
+                "<form method=post action=/password>"
+                f"<input type=hidden name=csrf value='{e(csrf)}'>"
+                "<label>Старый пароль<input type=password name=old_password required></label>"
+                "<label>Новый пароль<input type=password name=new_password required></label>"
+                "<label>Новый пароль ещё раз<input type=password name=new_password2 required></label>"
+                "<button>Сменить пароль</button>"
+                "</form>"
+                "<p class=muted>Изменяется пароль вашей учётной записи. "
+                "Старый пароль должен совпадать с текущим.</p>"
+                "<p><a class=btn href=/system>Отмена</a></p></div>")
+        return self._layout("Сменить пароль", "password", body, csrf)
+
+    def _page_password_confirm(self) -> str:
+        s = self._sess()
+        csrf = s.csrf if s else ""
+        return self._layout("Сменить пароль — подтверждение", "password",
+            "<div class=card style='max-width:520px'>"
+            "<h1>Сменить пароль</h1>"
+            "<p>Вы действительно хотите сменить пароль своей учётной записи?</p>"
+            "<div class=row>"
+            f"<form method=post action=/password/confirm><input type=hidden name=csrf value='{e(csrf)}'>"
+            "<button>Подтвердить</button></form> "
+            "<a class=btn href=/password>Отмена</a></div>"
+            "<p class=muted>Подтверждение защищает от случайной смены пароля.</p></div>", csrf)
 
     def _page_help(self) -> str:
         s = self._sess()
@@ -720,6 +752,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_auth(200, self._page_system_confirm("awg-restart"))
         if u.path == "/help":
             return self._send_auth(200, self._page_help())
+        if u.path == "/password":
+            return self._send_auth(200, self._page_password())
         if u.path == "/clients":
             sort = (q.get("sort", ["name"])[0] or "name")
             direction = (q.get("dir", ["asc"])[0] or "asc")
@@ -917,6 +951,51 @@ class Handler(BaseHTTPRequestHandler):
                     return self._redirect("/client?name=" + urllib.parse.quote(names[0]))
                 return self._redirect("/clients")
             return _fail("regen failed", r.rc, r.stderr)
+
+        if u.path == "/password":
+            old = form.get("old_password", "")
+            if isinstance(old, list):
+                old = old[0] if old else ""
+            new1 = form.get("new_password", "")
+            if isinstance(new1, list):
+                new1 = new1[0] if new1 else ""
+            new2 = form.get("new_password2", "")
+            if isinstance(new2, list):
+                new2 = new2[0] if new2 else ""
+            for _v in (old, new1, new2):
+                if not isinstance(_v, str):
+                    _v = str(_v)
+            if not old:
+                return self._send_auth(200, self._page_password("Укажите старый пароль"))
+            if not self.auth.verify(s.username, old):
+                self.auth.journal(ip, s.username, False, "bad old password (change)")
+                return self._send_auth(200, self._page_password("Старый пароль неверен"))
+            if not new1:
+                return self._send_auth(200, self._page_password("Укажите новый пароль"))
+            if new1 != new2:
+                return self._send_auth(200, self._page_password("Новые пароли не совпадают"))
+            if new1 == old:
+                return self._send_auth(200, self._page_password("Новый пароль совпадает со старым"))
+            s.pending_pw = new1
+            return self._send_auth(200, self._page_password_confirm())
+
+        if u.path == "/password/confirm":
+            pw = getattr(s, "pending_pw", None)
+            if not pw:
+                return self._send_auth(200, self._page_password(
+                    "Сессия истекла, начните смену пароля заново"))
+            # Сначала сохраняем в конфиг, потом в память — при ошибке записи
+            # пароль нигде не меняется.
+            try:
+                update_user_password(self.cfg.config_path, s.username, pw)
+            except Exception as ex:
+                sys.stderr.write(f"awg-panel: persist password failed: {ex}\n")
+                return self._send_auth(200, self._page_password(
+                    f"Не удалось сохранить пароль в конфиг: {e(ex)}"))
+            self.auth.users[s.username] = pw
+            s.pending_pw = None
+            self.auth.journal(ip, s.username, True, "password changed")
+            return self._send_auth(200, self._page_system("Пароль изменён."))
         return self._send_auth(404, "not found", "text/plain")
 
     def do_HEAD(self):
@@ -1149,7 +1228,7 @@ button:hover,.btn:hover{background:#cbd5e1}button:disabled{color:#9ca3af;cursor:
 .err{color:#b91c1c}.ok{color:#15803d}.warn{color:#b45309}.muted{color:#64748b;font-size:12px}.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
 pre{background:#0f172a;color:#e2e8f0;padding:12px;border-radius:6px;overflow:auto;max-width:100%;font-size:12px}pre.wrap{white-space:pre-wrap;word-break:break-all}
 img{max-width:100%}
-label{display:block;margin:8px 0}input[name=user],input[name=password],input[name=names]{width:100%}
+label{display:block;margin:8px 0}input[name=user],input[name=password],input[name=names],input[name=old_password],input[name=new_password],input[name=new_password2]{width:100%}
 @media(max-width:800px){aside{width:150px}}
 """
 

@@ -1132,5 +1132,69 @@ class TestHelpPage(unittest.TestCase):
         self.assertIn('href="/help" class="on"', body)
 
 
+class TestPasswordPage(unittest.TestCase):
+    def _handler(self):
+        from types import SimpleNamespace
+        from awg_panel import server as srv
+        from awg_panel.config import PanelConfig
+        h = srv.Handler.__new__(srv.Handler)
+        h.cfg = PanelConfig()
+        h._sess = lambda: SimpleNamespace(csrf="t", username="admin")
+        return h, srv
+
+    def test_password_page_fields(self):
+        h, _ = self._handler()
+        body = h._page_password()
+        self.assertIn("<h1>Сменить пароль</h1>", body)
+        self.assertIn("name=old_password", body)
+        self.assertIn("name=new_password", body)
+        self.assertIn("name=new_password2", body)
+        self.assertIn(">Сменить пароль<", body)
+        self.assertIn('href="/system"', body)
+
+    def test_password_confirm_page(self):
+        h, _ = self._handler()
+        body = h._page_password_confirm()
+        self.assertIn(">Подтвердить<", body)
+        self.assertIn(">Отмена<", body)
+        self.assertIn("/password/confirm", body)
+
+
+class TestConfigPasswordUpdate(unittest.TestCase):
+    def test_update_user_password(self):
+        import os, tempfile
+        from awg_panel.config import update_user_password, load_config
+        content = (
+            "[server]\nhost = 0.0.0.0\n\n"
+            "[users]\nuser.1 = admin\npassword.1 = oldpass\n"
+            "user.2 = guest\npassword.2 = guestpass\n"
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".ini", delete=False,
+                                         encoding="utf-8") as f:
+            f.write(content)
+            path = f.name
+        try:
+            update_user_password(path, "admin", "newpass123")
+            cfg = load_config(path)
+            self.assertEqual(cfg.users["admin"], "newpass123")
+            self.assertEqual(cfg.users["guest"], "guestpass")
+        finally:
+            os.unlink(path)
+
+    def test_update_user_password_not_found(self):
+        import os, tempfile
+        from awg_panel.config import update_user_password
+        content = "[users]\nuser.1 = admin\npassword.1 = oldpass\n"
+        with tempfile.NamedTemporaryFile("w", suffix=".ini", delete=False,
+                                         encoding="utf-8") as f:
+            f.write(content)
+            path = f.name
+        try:
+            with self.assertRaises(ValueError):
+                update_user_password(path, "nobody", "pw")
+        finally:
+            os.unlink(path)
+
+
 if __name__ == "__main__":
     unittest.main()
