@@ -13,15 +13,19 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Lint (py_compile + shellcheck)
+      - name: Python and Bash checks
         run: |
-          python3 -m py_compile src/awg_panel/*.py
-          python3 -m unittest discover -s tests -v
+          python3 -m py_compile src/awg_panel/*.py bin/awg-panel-set-password
+          python3 -W error::DeprecationWarning -m unittest discover -s tests -v
           bash -n bin/awg-panel-helper
+          bash -n packaging/DEBIAN/postinst packaging/DEBIAN/prerm packaging/DEBIAN/postrm build_deb.sh
       - name: Build .deb
         run: |
-          VER="${GITHUB_REF_NAME#v}"
-          VER="${VER:-0.1.0}"
+          VER="$(PYTHONPATH=src python3 -c 'from awg_panel import __version__; print(__version__)')"
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "v$VER" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match package version $VER" >&2
+            exit 1
+          fi
           ./build_deb.sh "$VER"
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -33,3 +37,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.deb
+          generate_release_notes: true

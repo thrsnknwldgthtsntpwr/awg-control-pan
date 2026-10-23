@@ -8,7 +8,7 @@ cd awg-control-pan
 
 # тесты — только stdlib, pip/venv не нужен
 python3 -m unittest discover -s tests -v
-# ожидаемо: 77/77 OK (на 0.1.19)
+# ожидаемо: все тесты OK
 ```
 
 Полный e2e — только на VPS с установленным инсталлером (нужны
@@ -47,18 +47,20 @@ bash -n bin/awg-panel-helper packaging/DEBIAN/postinst build_deb.sh
 | `TestSystemInfo` | устойчивость к битому `/proc` |
 | `TestPackaging` | root-owned `.deb`, `postinst` (права, next-steps без legacy), `service User=root`, `control` без sudo |
 | `TestClientPage` | порядок блоков Пир/Конфиг/vpn/QR, кнопки, copy.js-роут, CSS без page-h-scroll |
-| `TestLoginPage` | вход без меню, ссылка версии на GitHub |
+| `TestLoginPage` | вход по центру, без меню, названия и версии |
 | `TestClientsListPage` | «Удалить выбранные» disabled без выбора, «Добавить»/«Удалить» в одном ряду, «Сгенерировать имя» + data-атрибуты, clients.js-роут |
 | `TestClientNames` | дефолты/кастом `[client_names]`, clamp `rand_bytes`, fallback плохого префикса, лимит длины 63 |
 | `TestHttpRedirect` | `http://:80 → 301 https://:port` (URL, Host-валидация, live-редирект без кук) |
+| `TestProxyConfig`, `TestPanelHTTP` | префиксы URL, реальный IP, маршруты/формы/статика, CSRF, подтверждение regen, смена пароля и отзыв сессий через настоящий HTTP-handler |
+| `TestReviewRegressions` | валидация имён, атомарность/конкурентность записи INI, сортировка, ограниченное чтение журнала |
 
 Новый фикс = новый регресс-тест. Правило простое: «упало на VPS → тест, потом фикс».
 
 ## Сборка .deb
 
 ```bash
-./build_deb.sh 0.1.19
-# → dist/awg-panel_0.1.19_all.deb (dist/ — в .gitignore)
+./build_deb.sh 0.1.21
+# → dist/awg-panel_0.1.21_all.deb (dist/ — в .gitignore)
 ```
 
 Что делает скрипт:

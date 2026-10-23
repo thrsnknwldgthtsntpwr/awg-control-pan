@@ -12,7 +12,7 @@ MAX_PARSE_INPUT = 64 * 1024
 
 
 def valid_client_name(name) -> bool:
-    return isinstance(name, str) and bool(_NAME_RE.match(name))
+    return isinstance(name, str) and bool(_NAME_RE.fullmatch(name))
 
 
 def parse_names(raw) -> tuple[list[str], list[str]]:

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import concurrent.futures
-import base64
 import datetime
 import hmac
 import html
@@ -13,13 +12,14 @@ import sys
 import threading
 import time
 import urllib.parse
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import __version__
 from .auth import AuthStore
-from .config import PanelConfig, update_user_password
+from .config import PanelConfig, normalize_base_url, update_user_password, validate_password
 from .manage import (
     cmd_add,
     cmd_awg_restart,
@@ -33,8 +33,6 @@ from .manage import (
 )
 from .system_info import cpu_pct, disk_usage, fmt_bytes, load_avg, mem_info, net_dev, uptime_str
 from .validate import expires_flag, parse_names, valid_client_name
-
-CSS = '<link rel="stylesheet" href="/static/style.css">'
 
 # Cap form bodies to avoid OOM on huge POSTs.
 MAX_FORM_BYTES = 1 << 20  # 1 MiB
@@ -162,16 +160,13 @@ def sort_clients(clients: list, stats_map: dict, sort: str = "name",
         return sorted(items, key=lambda c: _ip_sort_key(c.get("ip")), reverse=reverse)
     if sort == "status":
         return sorted(items, key=lambda c: (_status_rank(c),
-                                            str(c.get("status", "") or "").lower(),
-                                            str(c.get("name", "") or "").lower()),
+                                            str(c.get("status", "") or "").lower()),
                       reverse=reverse)
     if sort == "traffic":
         return sorted(items, key=lambda c: _traffic_total(c.get("name"), stats_map or {}),
                       reverse=reverse)
     if sort == "expires":
-        return sorted(items, key=lambda c: (_expires_key(c),
-                                            str(c.get("name", "") or "").lower()),
-                      reverse=reverse)
+        return sorted(items, key=_expires_key, reverse=reverse)
     return items
 
 
@@ -192,6 +187,21 @@ def _schedule_reboot(delay_sec: float = 2.0) -> None:
             sys.stderr.write(f"awg-panel: reboot thread failed: {ex}\n")
 
     threading.Thread(target=_do, daemon=True, name="awg-reboot").start()
+
+
+def _parallel_calls(*calls):
+    """One deadline for read-only installer calls; never wait on timeout exit."""
+    executor = ThreadPoolExecutor(max_workers=len(calls))
+    try:
+        futures = [executor.submit(func, *args) for func, *args in calls]
+        _, pending = concurrent.futures.wait(futures, timeout=FUT_TIMEOUT)
+        if pending:
+            raise concurrent.futures.TimeoutError()
+        return tuple(future.result() for future in futures)
+    finally:
+        # A context manager would call shutdown(wait=True), defeating the
+        # deadline. Already-running subprocesses retain their own timeouts.
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -226,10 +236,40 @@ class Handler(BaseHTTPRequestHandler):
         return self.auth.get(sid) if sid else None
 
     def _client_ip(self) -> str:
-        # Direct connections only (no trusted reverse proxy): never trust
-        # X-Forwarded-For — it is client-controlled and would let anyone
-        # bypass the login rate-limit and forge auth.log entries.
-        return self.client_address[0]
+        peer = self.client_address[0]
+        try:
+            address = ipaddress.ip_address(peer)
+            if any(address in network for network in self.cfg.trusted_proxies):
+                # nginx must OVERWRITE this header, never append to it.
+                forwarded = self.headers.get_all("X-Real-IP", [])
+                if len(forwarded) == 1 and "%" not in forwarded[0]:
+                    return str(ipaddress.ip_address(forwarded[0].strip()))
+        except ValueError:
+            pass
+        return peer
+
+    def _url(self, path: str) -> str:
+        return self.cfg.base_url + path
+
+    def _request_url(self):
+        """Strip exactly one configured mount prefix, before routing/auth."""
+        if not self.path.startswith("/"):
+            return None
+        try:
+            url = urllib.parse.urlsplit(self.path)
+        except ValueError:
+            return None
+        base = self.cfg.base_url
+        if base:
+            if url.path == base:
+                return url._replace(path="/")
+            if not url.path.startswith(base + "/"):
+                return None
+            url = url._replace(path=url.path[len(base):])
+        return url
+
+    def _script(self, name: str) -> str:
+        return f'<script src="{self._url("/static/" + name)}" defer></script>'
 
     def _send(self, code: int, body: str | bytes, ctype="text/html; charset=utf-8", extra=None,
                 no_store: bool = True):
@@ -270,15 +310,16 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(code, body, ctype, extra, no_store)
 
     def _redirect(self, where: str, cookie: str | None = None):
-        h = {"Location": where}
+        h = {"Location": self._url(where)}
         if cookie is not None:
             h["Set-Cookie"] = cookie
         self._send(303, "", extra=h)
 
     def _set_session_cookie(self, sid: str | None) -> str:
+        path = self._url("/")
         if sid:
-            return f"awgpanel={sid}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={self.cfg.session_ttl_min*60}"
-        return "awgpanel=expired; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0"
+            return f"awgpanel={sid}; Path={path}; HttpOnly; Secure; SameSite=Lax; Max-Age={self.cfg.session_ttl_min*60}"
+        return f"awgpanel=expired; Path={path}; HttpOnly; Secure; SameSite=Lax; Max-Age=0"
 
     def _require_auth(self):
         s = self._sess()
@@ -301,10 +342,11 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             raise ValueError("form too large")
         raw = self.rfile.read(n).decode("utf-8", "replace") if n else ""
-        pairs = urllib.parse.parse_qsl(raw, keep_blank_values=True)
-        if len(pairs) > MAX_FORM_FIELDS:
+        try:
+            pairs = urllib.parse.parse_qsl(raw, keep_blank_values=True, max_num_fields=MAX_FORM_FIELDS)
+        except ValueError:
             self.close_connection = True
-            raise ValueError("form too large")
+            raise
         out = {}
         for k, v in pairs:
             if k in out:
@@ -328,33 +370,34 @@ class Handler(BaseHTTPRequestHandler):
     # ---------- pages ----------
     def _layout(self, title: str, active: str, body: str, csrf: str = "", nav: bool = True) -> str:
         nav_links = "".join(
-            f'<a href="{href}" class="{"on" if active==k else ""}">{label}</a>'
+            f'<a href="{self._url(href)}" class="{"on" if active==k else ""}">{label}</a>'
             for k, href, label in (("system", "/system", "Система"),
                                    ("clients", "/clients", "Клиенты"),
                                    ("help", "/help", "Справка"),
-                                   ("support", "/support", "Поддержка"),
                                    ("password", "/password", "Сменить пароль")))
         if active == "logout" or csrf:
-            logout = (f"<form method=post action=/logout class=navlogout>"
+            logout = (f"<form method=post action={self.cfg.base_url}/logout class=navlogout>"
                       f"<input type=hidden name=csrf value='{e(csrf)}'>"
                       f"<button type=submit class='navlink{' on' if active=='logout' else ''}'>Выход</button></form>")
         else:
-            logout = '<a href="/logout">Выход</a>'
-        nav = (nav_links + logout) if nav else ""
+            logout = f'<a href="{self.cfg.base_url}/logout">Выход</a>'
+        sidebar = (f"<aside><div class=brand>AWG Panel<small>v{__version__}</small></div>"
+                   f"<nav>{nav_links}{logout}</nav></aside>") if nav else ""
+        page_title = f"{title} — AWG Panel" if nav else title
+        body_class = "" if nav else ' class="login-page"'
+        css = f'<link rel="stylesheet" href="{self._url("/static/style.css")}">'
         return ("<!doctype html><html lang=ru><head><meta charset=utf-8>"
                 "<meta name=viewport content='width=device-width,initial-scale=1'>"
-                f"<title>{e(title)} — AWG Panel</title>{CSS}</head>"
-                f"<body><aside><div class=brand>AWG Panel<small>v{__version__}</small></div>"
-                f"<nav>{nav}</nav></aside><main>{body}</main></body></html>")
+                f"<title>{e(page_title)}</title>{css}</head>"
+                f"<body{body_class}>{sidebar}<main>{body}</main></body></html>")
 
     def _page_login(self, err=""):
         msg = f'<p class=err>{e(err)}</p>' if err else ""
-        return self._layout("Вход", "", f"<div class=card style='max-width:420px'><h1>Вход</h1>{msg}"
-                           "<form method=post action=/login>"
-                           "<label>Логин<input name=user autofocus></label>"
-                           "<label>Пароль<input type=password name=password></label>"
-                           "<button>Войти</button></form>"
-                           "<p class=muted>Доступ задаётся администратором сервера.</p></div>", nav=False)
+        return self._layout("Вход", "", f"<div class='card login-card'><h1>Вход</h1>{msg}"
+                           f"<form method=post action={self.cfg.base_url}/login>"
+                           "<label>Логин<input name=user autocomplete=username autofocus required></label>"
+                           "<label>Пароль<input type=password name=password autocomplete=current-password required></label>"
+                           "<button>Войти</button></form></div>", nav=False)
 
     def _page_system(self, msg="") -> str:
         s = self._sess()
@@ -362,7 +405,7 @@ class Handler(BaseHTTPRequestHandler):
         m = f"<p class=ok>{e(msg)}</p>" if msg else ""
         body = (f"<h1>Система</h1>{m}"
                 f"{self._system_block()}{self._interfaces_block()}"
-                f"{self._awg_block()}{self._actions_block(csrf)}"
+                f"{self._awg_block()}{self._actions_block()}"
                 f"{self._journal_block()}")
         return self._layout("Система", "system", body, csrf)
 
@@ -381,9 +424,9 @@ class Handler(BaseHTTPRequestHandler):
             "<div class=card style='max-width:520px'>"
             f"<h1>{e(title)}</h1><p>{e(text)}</p>"
             "<div class=row>"
-            f"<form method=post action={action}><input type=hidden name=csrf value='{e(csrf)}'>"
+            f"<form method=post action={self._url(action)}><input type=hidden name=csrf value='{e(csrf)}'>"
             "<button>Подтвердить</button></form> "
-            "<a class=btn href=/system>Отмена</a></div>"
+            f"<a class=btn href={self.cfg.base_url}/system>Отмена</a></div>"
             "<p class=muted>Подтверждение защищает от случайного нажатия. "
             "Перезагрузка сервера разорвёт текущую сессию.</p></div>", csrf)
 
@@ -392,9 +435,9 @@ class Handler(BaseHTTPRequestHandler):
         csrf = s.csrf if s else ""
         return self._layout("Выход", "logout",
             "<div class=card style='max-width:420px'><h1>Выйти?</h1>"
-            f"<form method=post action=/logout><input type=hidden name=csrf value='{e(csrf)}'>"
+            f"<form method=post action={self.cfg.base_url}/logout><input type=hidden name=csrf value='{e(csrf)}'>"
             "<button>Выйти</button></form>"
-            "<p><a href=/system>Остаться</a></p></div>", csrf)
+            f"<p><a href={self.cfg.base_url}/system>Остаться</a></p></div>", csrf)
 
     def _page_password(self, err="") -> str:
         s = self._sess()
@@ -402,7 +445,7 @@ class Handler(BaseHTTPRequestHandler):
         msg = f'<p class=err>{e(err)}</p>' if err else ""
         body = (f"<h1>Сменить пароль</h1>{msg}"
                 "<div class=card style='max-width:420px'>"
-                "<form method=post action=/password>"
+                f"<form method=post action={self.cfg.base_url}/password>"
                 f"<input type=hidden name=csrf value='{e(csrf)}'>"
                 "<label>Старый пароль<input type=password name=old_password required></label>"
                 "<label>Новый пароль<input type=password name=new_password required></label>"
@@ -411,7 +454,7 @@ class Handler(BaseHTTPRequestHandler):
                 "</form>"
                 "<p class=muted>Изменяется пароль вашей учётной записи. "
                 "Старый пароль должен совпадать с текущим.</p>"
-                "<p><a class=btn href=/system>Отмена</a></p></div>")
+                f"<p><a class=btn href={self.cfg.base_url}/system>Отмена</a></p></div>")
         return self._layout("Сменить пароль", "password", body, csrf)
 
     def _page_password_confirm(self) -> str:
@@ -422,98 +465,67 @@ class Handler(BaseHTTPRequestHandler):
             "<h1>Сменить пароль</h1>"
             "<p>Вы действительно хотите сменить пароль своей учётной записи?</p>"
             "<div class=row>"
-            f"<form method=post action=/password/confirm><input type=hidden name=csrf value='{e(csrf)}'>"
+            f"<form method=post action={self.cfg.base_url}/password/confirm><input type=hidden name=csrf value='{e(csrf)}'>"
             "<button>Подтвердить</button></form> "
-            "<a class=btn href=/password>Отмена</a></div>"
+            f"<a class=btn href={self.cfg.base_url}/password>Отмена</a></div>"
             "<p class=muted>Подтверждение защищает от случайной смены пароля.</p></div>", csrf)
 
     def _page_help(self) -> str:
-        s = self._sess()
-        csrf = s.csrf if s else ""
-        body = ("<h1>Справка</h1>"
-                "<div class=card><p class=muted>В коммерческой версии внешние ссылки удалены. "
-                "По вопросам работы панели — раздел «Поддержка».</p></div>"
-                "<div class=stack>"
-                "<div class=card>"
-                "<h2>«Подробнее» по теме</h2>"
-                "<p class=muted>Выберите раздел справочной системы:</p>"
-                "<div class=row>"
-                "<a class=btn href='/faq' style='flex:1'>FAQ по панели управления</a> "
-                "<a class=btn href='/instructions' style='flex:1'>Инструкции для пользователей</a>"
-                "</div></div></div>")
-        return self._layout("Справка", "help", body, csrf)
-
-    def _page_support(self) -> str:
-        s = self._sess()
-        csrf = s.csrf if s else ""
-        body = ("<h1>Поддержка</h1>"
-                "<div class=card>"
-                "<p>Техническая поддержка коммерческой версии AWG Panel:</p>"
-                "<p><a href='https://t.me/thrsnknwldgthtsntpwr' target=_blank rel=noopener>"
-                "t.me/thrsnknwldgthtsntpwr</a></p>"
-                "<p class=muted>Открывается в новой вкладке Telegram.</p></div>")
-        return self._layout("Поддержка", "support", body, csrf)
-
-    def _page_faq(self) -> str:
-        s = self._sess()
-        csrf = s.csrf if s else ""
-        ICON_ADD = ('<svg width=16 height=16 viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-                    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px">'
-                    '<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>'
-                    '<circle cx="8.5" cy="7" r="4"></circle><line x1="20" y1="8" x2="20" y2="14"></line>'
-                    '<line x1="16" y1="20" x2="16" y2="20"></line></svg>')
-        ICON_KEY = ('<svg width=16 height=16 viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-                    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px">'
-                    '<path d="M21 2l-2 2m-7 7 7-7m-7 7l-2.93 2.93a1 1 0 0 1-1.41 0l-1.42-1.42a1 1 0 0 1 0-1.41l2.93-2.93a1 1 0 0 1 1.41 0l1.42 1.42a1 1 0 0 1 0 1.41z"></path>'
-                    '<path d="M3 11l2 2m7.77 1.74L13 11.5l-1.42-1.42a1 1 0 0 1 0-1.41l2.93-2.93a1 1 0 0 1 1.41 0l1.42 1.42a1 1 0 0 1 0 1.41z"></path>'
-                    '<path d="M12 12l2.93-2.93a1 1 0 0 1 1.41 0l1.42 1.42a1 1 0 0 1 0 1.41z"></path></svg>')
-        ICON_POWER = ('<svg width=16 height=16 viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-                      'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px">'
-                      '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>'
-                      '<line x1="12" y1="19" x2="12" y2="23"></line><line x1="12" y1="14" x2="12" y2="18"></line></svg>')
-        ICON_REFRESH = ('<svg width=16 height=16 viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-                        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px">'
-                        '<path d="M1 4v6h6"></path><path d="M23 20v-6h-6"></path>'
-                        '<path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"></path></svg>')
-        ICON_DELETE = ('<svg width=16 height=16 viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-                       'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px">'
-                       '<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>')
-        ICON_ROTATE = ('<svg width=16 height=16 viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-                       'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px">'
-                       '<path d="M12 2a10 10 0 0 0-9 9v4a9 9 0 0 0 9 9h4a9 9 0 0 0 9-9v-4a9 9 0 0 0-9-9z"></path>'
-                       '<circle cx="12" cy="12" r="3"></circle></svg>')
+        session = self._sess()
+        csrf = session.csrf if session else ""
         faq_items = (
-            ("Как добавить пользователя", ICON_ADD,
-             "<p>Перейдите в раздел <b>Клиенты</b> → нажмите <b>Добавить</b> → укажите имена клиентов через пробел или запятую (например <i>ivan petr maria</i>) → при необходимости укажите срок действия в днях (пусто — бессрочно) → нажмите кнопку <b>Добавить</b>.</p>"
-             "<p>После добавления клиент появится в таблице. Нажмите на его имя, чтобы скачать .conf, QR-код или получить vpn:// URI для импорта в приложение.</p>"),
-            ("Как сменить пароль учётной записи", ICON_KEY,
-             "<p>Перейдите в раздел <b>Сменить пароль</b> (последний пункт в боковом меню).</p>"
-             "<p>Введите <b>старый пароль</b>, затем <b>новый пароль</b> и повторите его в поле <b>Новый пароль ещё раз</b>. Нажмите кнопку <b>Сменить пароль</b>.</p>"
-             "<p>Появится окно подтверждения — нажмите <b>Подтвердить</b>. Пароль будет изменён для вашей текущей учётной записи и сохранён в конфиге сервера.</p>"),
-            ("Как перезагрузить сервер", ICON_POWER,
-             "<p>Перейдите в раздел <b>Система</b> → в блоке «Действия» нажмите ссылку <b>Перезагрузить сервер</b>.</p>"
-             "<p>Появится окно подтверждения. Нажмите <b>Подтвердить</b>. Перезагрузка разорвёт текущую сессию, после чего потребуется войти повторно.</p>"),
-            ("Как перезапустить AWG", ICON_REFRESH,
-             "<p>Перейдите в раздел <b>Система</b> → в блоке «Действия» нажмите ссылку <b>Перезапустить awg</b>.</p>"
-             "<p>Появится окно подтверждения. Нажмите <b>Подтвердить</b>. Выполняется команда systemctl restart awg-quick@awg0.</p>"),
-            ("Как удалить клиента", ICON_DELETE,
-             "<p>Перейдите в раздел <b>Клиенты</b> → поставьте галочку напротив имени клиента (или нескольких) → нажмите кнопку <b>Удалить выбранные</b>.</p>"
-             "<p>Подтвердите удаление в появившемся окне. Конфиг и QR-код клиента будут удалены без возможности восстановления.</p>"),
-            ("Как пересоздать ключи клиента (regen)", ICON_ROTATE,
-             "<p>Откройте карточку клиента (раздел <b>Клиенты</b> → нажмите на имя) → нажмите кнопку <b>Пересоздать</b>.</p>"
-             "<p>Новый ключ и конфиг будут сгенерированы. Старый конфиг клиента перестанет работать — обновите его в приложении.</p>"),
+            ("Как добавить пользователя?",
+             "Откройте «Клиенты», введите имя или несколько имён через пробел или запятую, "
+             "при необходимости укажите срок в днях и нажмите «Добавить». "
+             "Допустимы латинские буквы, цифры, дефис и подчёркивание, длина — до 63 символов. "
+             "Кнопка «Сгенерировать имя» добавляет случайное имя в поле. За один раз можно добавить до 100 клиентов."),
+            ("Как удалить пользователя?",
+             "В разделе «Клиенты» отметьте нужные строки, нажмите «Удалить выбранные», "
+             "проверьте список и подтвердите удаление. Кнопка доступна после выбора хотя бы одной строки. "
+             "Конфиги и QR-коды выбранных клиентов удаляются, старое подключение перестаёт работать."),
+            ("Как посмотреть QR-код?",
+             "Откройте «Клиенты» и нажмите на имя клиента. QR-код находится внизу карточки, "
+             "а кнопка «QR.png» открывает его в новой вкладке. Отсканируйте его в совместимом VPN-приложении. "
+             "Если код отсутствует, обратитесь к администратору: файл QR мог не быть создан установщиком."),
+            ("Как скачать конфиг или скопировать vpn://?",
+             "В карточке клиента нажмите «Скачать .conf» для импорта из файла. "
+             "Под блоками «Конфиг» и «vpn://» есть кнопки «Скопировать». "
+             "Блок vpn:// показывается, если установщик создал такую ссылку. "
+             "Конфиг, ссылка и QR-код дают доступ к VPN — передавайте их только владельцу подключения."),
+            ("Как задать срок действия?",
+             "При добавлении заполните поле срока: от 1 до 3650 дней. Пустое поле или 0 означают бессрочный доступ. "
+             "Текущий срок виден в таблице и карточке клиента. Изменение срока существующего клиента в интерфейсе "
+             "пока не предусмотрено; удаление истёкших выполняет задача cron установщика."),
+            ("Как посмотреть статус и трафик?",
+             "В разделе «Клиенты» показаны статус, RX/TX и срок. Нажатие на заголовок сортирует таблицу, "
+             "повторное нажатие меняет порядок. В карточке есть время последнего handshake. "
+             "RX/TX — накопленные счётчики, а не текущая скорость. Для свежих данных обновите страницу."),
+            ("Как пересоздать ключи клиента?",
+             "Откройте карточку, нажмите «Пересоздать», проверьте имя и подтвердите действие. "
+             "Старый конфиг перестанет работать: скачайте новый и заново импортируйте его на устройстве клиента."),
+            ("Как сменить пароль учётной записи?",
+             "Откройте «Сменить пароль», введите текущий пароль, дважды новый и нажмите «Сменить пароль». "
+             "Затем нажмите «Подтвердить». Меняется пароль входа в панель, VPN-конфиги остаются прежними. "
+             "Другие сеансы этой учётной записи будут завершены."),
+            ("Как перезапустить AWG?",
+             "В разделе «Система», в блоке «Действия» нажмите «Перезапустить awg» и подтвердите. "
+             "VPN-соединения кратковременно прервутся; сама панель продолжит работать."),
+            ("Как перезагрузить сервер?",
+             "В разделе «Система», в блоке «Действия» нажмите «Перезагрузить сервер» и подтвердите. "
+             "Панель и VPN будут недоступны до завершения загрузки. После перезагрузки войдите в панель снова."),
         )
-        blocks = ""
-        for title, icon, content in faq_items:
-            blocks += (
-                "<details class=faq style='margin-bottom:12px;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden'>"
-                "<summary style='padding:10px 14px;cursor:pointer;background:#f8fafc;font-weight:600'>" + icon + title + "</summary>"
-                "<div style='padding:12px 16px'>" + content + "</div>"
-                "</details>"
-            )
-        body = ("<h1>FAQ по панели управления</h1>"
-                "<div class=card>" + blocks + "</div>")
-        return self._layout("FAQ", "faq", body, csrf)
+        blocks = "".join(
+            f'<details class=faq name=panel-faq><summary>{e(question)}</summary><p>{e(answer)}</p></details>'
+            for question, answer in faq_items)
+        body = ("<h1>Справка</h1><div class=card id=faq><h2>Частые вопросы</h2>"
+                "<p class=muted>Нажмите на вопрос, чтобы открыть ответ. «Пользователь» здесь — VPN-клиент, "
+                "а учётная запись панели используется для входа в этот интерфейс.</p>"
+                + blocks + "</div>"
+                f"<div class=card><a class=btn href='{self._url('/instructions')}'>Инструкции для пользователей</a></div>"
+                "<div class=card><h2>Проект</h2>"
+                "<p><a href='https://github.com/thrsnknwldgthtsntpwr/awg-control-pan' target=_blank rel=noopener>AWG Panel на GitHub</a></p>"
+                "<p><a href='https://github.com/bivlked/amneziawg-installer' target=_blank rel=noopener>Установщик AmneziaWG на GitHub</a></p></div>")
+        return self._layout("Справка", "help", body, csrf)
 
     def _page_instructions(self) -> str:
         s = self._sess()
@@ -536,9 +548,9 @@ class Handler(BaseHTTPRequestHandler):
                 "<summary style='padding:10px 14px;cursor:pointer;background:#f8fafc;font-weight:600'>" + ICON_VPN + "AmneziaVPN</summary>"
                 "<div style='padding:12px 16px'>"
                 "<div class=row>"
-                "<a class=btn style='flex:1'>Windows</a> "
-                "<a class=btn style='flex:1'>Android</a> "
-                "<a class=btn style='flex:1'>iOS</a>"
+                "<span>Windows</span> "
+                "<span>Android</span> "
+                "<span>iOS</span>"
                 "</div>"
                 "<p class=muted style='margin-top:10px'>Импортируйте .conf или отсканируйте QR-код клиента в приложении AmneziaVPN.</p>"
                 "</div></details>"
@@ -546,9 +558,9 @@ class Handler(BaseHTTPRequestHandler):
                 "<summary style='padding:10px 14px;cursor:pointer;background:#f8fafc;font-weight:600'>" + ICON_VPN + "AmneziaWG</summary>"
                 "<div style='padding:12px 16px'>"
                 "<div class=row>"
-                "<a class=btn style='flex:1'>Windows</a> "
-                "<a class=btn style='flex:1'>Android</a> "
-                "<a class=btn style='flex:1'>iOS</a>"
+                "<span>Windows</span> "
+                "<span>Android</span> "
+                "<span>iOS</span>"
                 "</div>"
                 "<p class=muted style='margin-top:10px'>Импортируйте .conf или отсканируйте QR-код клиента в приложении AmneziaWG.</p>"
                 "</div></details>"
@@ -556,9 +568,9 @@ class Handler(BaseHTTPRequestHandler):
                 "<summary style='padding:10px 14px;cursor:pointer;background:#f8fafc;font-weight:600'>" + ICON_VPN + "DefaultVPN</summary>"
                 "<div style='padding:12px 16px'>"
                 "<div class=row>"
-                "<a class=btn style='flex:1'>Windows</a> "
-                "<a class=btn style='flex:1'>Android</a> "
-                "<a class=btn style='flex:1'>iOS</a>"
+                "<span>Windows</span> "
+                "<span>Android</span> "
+                "<span>iOS</span>"
                 "</div>"
                 "<p class=muted style='margin-top:10px'>Импортируйте .conf или отсканируйте QR-код клиента в приложении DefaultVPN.</p>"
                 "</div></details>"
@@ -595,10 +607,10 @@ class Handler(BaseHTTPRequestHandler):
                 f"<table><tr><th>Iface</th><th>RX</th><th>TX</th></tr>{net_rows}</table>"
                 f"<p class=muted>Счётчики с загрузки (/proc/net/dev), не скорость.</p></div>")
 
-    def _actions_block(self, csrf: str) -> str:
+    def _actions_block(self) -> str:
         return ("<div class=card><h2>Действия</h2><div class=row>"
-                "<a class=btn href='/system/reboot'>Перезагрузить сервер</a> "
-                "<a class=btn href='/system/awg-restart'>Перезапустить awg</a></div>"
+                f"<a class=btn href='{self.cfg.base_url}/system/reboot'>Перезагрузить сервер</a> "
+                f"<a class=btn href='{self.cfg.base_url}/system/awg-restart'>Перезапустить awg</a></div>"
                 "<p class=muted>Оба действия требуют подтверждения. "
                 "Перезапуск awg = systemctl restart awg-quick@awg0.</p></div>")
 
@@ -648,7 +660,7 @@ class Handler(BaseHTTPRequestHandler):
     def _journal_block(self) -> str:
         try:
             with open(self.cfg.auth_log, encoding="utf-8", errors="replace") as f:
-                lines = f.read().strip().splitlines()[-10:]
+                lines = [line.rstrip("\r\n") for line in deque(f, maxlen=10)]
         except OSError:
             return ""
         if not lines:
@@ -670,7 +682,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 ndir = "asc"
                 arrow = ""
-            return f"<a href='/clients?sort={field}&dir={ndir}'>{label}{arrow}</a>"
+            return f"<a href='{self.cfg.base_url}/clients?sort={field}&dir={ndir}'>{label}{arrow}</a>"
 
         rows = []
         for c in sort_clients(clients, stats_map, sort, direction):
@@ -691,7 +703,7 @@ class Handler(BaseHTTPRequestHandler):
             pk = pubkeys.get(name, "…")
             rows.append(
                 f"<tr><td><input type=checkbox name=sel value='{e(name)}'></td>"
-                f"<td><a href='/client?name={urllib.parse.quote(str(name))}'>{e(name)}</a></td>"
+                f"<td><a href='{self.cfg.base_url}/client?name={urllib.parse.quote(str(name))}'>{e(name)}</a></td>"
                 f"<td>{e(ip)}</td><td class=mono>{e(pk)}</td>"
                 f"<td class={cls}>{e(st)}</td><td>{e(traf)}</td>"
                 f"<td>{e(fmt_exp(c.get('expires_at')))}</td></tr>")
@@ -710,13 +722,10 @@ class Handler(BaseHTTPRequestHandler):
         # list/stats/helper run in parallel with an overall future timeout
         # so one hung manage call cannot hold handler threads forever.
         try:
-            with ThreadPoolExecutor(max_workers=3) as ex:
-                fl = ex.submit(cmd_list, self.cfg.manage_script)
-                fs = ex.submit(cmd_stats, self.cfg.manage_script)
-                fh = ex.submit(run_helper, self.cfg.helper, "server-pubkeys")
-                rl = fl.result(timeout=FUT_TIMEOUT)
-                rs = fs.result(timeout=FUT_TIMEOUT)
-                _rc, pk_raw, _e = fh.result(timeout=FUT_TIMEOUT)
+            rl, rs, (_rc, pk_raw, _e) = _parallel_calls(
+                (cmd_list, self.cfg.manage_script),
+                (cmd_stats, self.cfg.manage_script),
+                (run_helper, self.cfg.helper, "server-pubkeys"))
         except concurrent.futures.TimeoutError:
             sys.stderr.write("awg-panel: clients page future timeout\n")
             return self._layout("Клиенты", "clients",
@@ -746,7 +755,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._layout("Клиенты", "clients",
             f"<h1>Клиенты <span class=muted>({len(clients)})</span></h1>{m}"
             "<div class=card>"
-            f"<form method=post action=/clients/add id=addf class=row>"
+            f"<form method=post action={self.cfg.base_url}/clients/add id=addf class=row>"
             f"<input type=hidden name=csrf value='{e(csrf)}'>"
             "<input name=names id=names placeholder='имена через пробел/запятую' required>"
             "<input name=days placeholder='дней (пусто=∞)' size=10 pattern='[0-9]*'>"
@@ -754,11 +763,11 @@ class Handler(BaseHTTPRequestHandler):
             f"data-rand-bytes='{self.cfg.client_name_rand_bytes}'>Сгенерировать имя</button></form>"
             "<div class=row><button type=submit form=addf>Добавить</button> "
             "<button type=submit form=delf id=delbtn disabled>Удалить выбранные</button></div>"
-            f"<form method=post action=/clients/delete id=delf><input type=hidden name=csrf value='{e(csrf)}'>"
+            f"<form method=post action={self.cfg.base_url}/clients/delete id=delf><input type=hidden name=csrf value='{e(csrf)}'>"
             f"{tbl}</form>"
             "<p class=muted>Таблица = manage list --json (+stats, ключи из awg0.conf). "
             "Удаление множественное чекбоксами. Имя-ссылка → карточка. "
-            "Удаление требует подтверждения.</p></div>" + CLIENTS_TAG, csrf)
+            "Удаление требует подтверждения.</p></div>" + self._script("clients.js"), csrf)
 
     def _page_clients_delete_confirm(self, names: list[str]) -> str:
         s = self._sess()
@@ -771,10 +780,10 @@ class Handler(BaseHTTPRequestHandler):
             "<p>Удаление пользователей: Вы уверены?</p>"
             f"<table>{items}</table>"
             "<div class=row>"
-            f"<form method=post action=/clients/delete/confirm>"
+            f"<form method=post action={self.cfg.base_url}/clients/delete/confirm>"
             f"<input type=hidden name=csrf value='{e(csrf)}'>{hidden}"
             "<button>Подтвердить</button></form> "
-            "<a class=btn href=/clients>Отмена</a></div>"
+            f"<a class=btn href={self.cfg.base_url}/clients>Отмена</a></div>"
             "<p class=muted>Операция опасная: конфиги и QR выбранных клиентов будут удалены.</p></div>", csrf)
 
     def _page_client(self, name: str) -> str:
@@ -783,15 +792,11 @@ class Handler(BaseHTTPRequestHandler):
         if not valid_client_name(name):
             return self._layout("Клиент", "clients", "<p class=err>bad name</p>", csrf0)
         try:
-            with ThreadPoolExecutor(max_workers=4) as ex:
-                fl = ex.submit(cmd_list, self.cfg.manage_script)
-                fs = ex.submit(cmd_stats, self.cfg.manage_script)
-                f1 = ex.submit(run_helper, self.cfg.helper, "client-conf", name)
-                f2 = ex.submit(run_helper, self.cfg.helper, "client-uri", name)
-                rl = fl.result(timeout=FUT_TIMEOUT)
-                rs = fs.result(timeout=FUT_TIMEOUT)
-                rc1, conf, _e1 = f1.result(timeout=FUT_TIMEOUT)
-                rc2, uri, _e2 = f2.result(timeout=FUT_TIMEOUT)
+            rl, rs, (rc1, conf, _e1), (rc2, uri, _e2) = _parallel_calls(
+                (cmd_list, self.cfg.manage_script),
+                (cmd_stats, self.cfg.manage_script),
+                (run_helper, self.cfg.helper, "client-conf", name),
+                (run_helper, self.cfg.helper, "client-uri", name))
         except concurrent.futures.TimeoutError:
             sys.stderr.write("awg-panel: client page future timeout\n")
             return self._layout(name, "clients", "<p class=err>Превышено время ожидания. Попробуйте позже.</p>", csrf0)
@@ -814,7 +819,7 @@ class Handler(BaseHTTPRequestHandler):
             traf = "?"
         hs_s = fmt_hs(st.get("last_handshake", 0)) if st else "никогда"
         return self._layout(name, "clients",
-            f"<h1><a href=/clients>Клиенты</a> / {e(name)}</h1>"
+            f"<h1><a href={self.cfg.base_url}/clients>Клиенты</a> / {e(name)}</h1>"
             "<div class=stack>"
             f"<div class=card><h2>Пир</h2><table>"
             f"<tr><th>IP</th><td>{e(info.get('ip','?'))} {e(info.get('client_ipv6','') or '')}</td></tr>"
@@ -824,21 +829,41 @@ class Handler(BaseHTTPRequestHandler):
             f"<tr><th>Handshake</th><td>{e(hs_s)}</td></tr>"
             "</table>"
             "<div class=actions>"
-            f"<form method=post action=/clients/regen><input type=hidden name=csrf value='{e(csrf0)}'>"
+            f"<form method=post action={self.cfg.base_url}/clients/regen><input type=hidden name=csrf value='{e(csrf0)}'>"
             f"<input type=hidden name=sel value='{e(name)}'><button>Пересоздать</button></form>"
-            f"<a class=btn href='/download?name={urllib.parse.quote(name)}&type=conf'>Скачать .conf</a> "
-            f"<a class=btn target=_blank rel=noopener href='/client-qr?name={urllib.parse.quote(name)}'>QR.png</a></div></div>"
+            f"<a class=btn href='{self.cfg.base_url}/download?name={urllib.parse.quote(name)}&type=conf'>Скачать .conf</a> "
+            f"<a class=btn target=_blank rel=noopener href='{self.cfg.base_url}/client-qr?name={urllib.parse.quote(name)}'>QR.png</a></div></div>"
             f"<div class=card><h2>Конфиг</h2><pre class=conf id=conf-pre>{e(conf_txt)}</pre>"
             "<div class=actions><button type=button data-src=conf-pre>Скопировать</button></div></div>"
             + (f"<div class=card><h2>vpn://</h2><pre class=wrap id=vpn-pre>{e(uri_txt)}</pre>"
                "<div class=actions><button type=button data-src=vpn-pre>Скопировать</button></div></div>" if uri_txt else "")
-            + (f"<div class=card><h2>QR</h2><img src='/client-qr?name={urllib.parse.quote(name)}' alt=QR style='max-width:260px'></div>"
+            + (f"<div class=card><h2>QR</h2><img src='{self.cfg.base_url}/client-qr?name={urllib.parse.quote(name)}' alt=QR style='max-width:260px'></div>"
                if rc1 == 0 else "")
-            + "</div>" + COPY_TAG, csrf0)
+            + "</div>" + self._script("copy.js"), csrf0)
+
+    def _page_client_regen_confirm(self, names: list[str]) -> str:
+        session = self._sess()
+        csrf = session.csrf if session else ""
+        clients = "".join(f"<li>{e(name)}</li>" for name in names)
+        fields = "".join(f"<input type=hidden name=sel value='{e(name)}'>" for name in names)
+        cancel = "/client?name=" + urllib.parse.quote(names[0]) if len(names) == 1 else "/clients"
+        body = ("<div class=card style='max-width:520px'><h1>Пересоздать ключи?</h1>"
+                f"<ul>{clients}</ul>"
+                "<p class=warn>Старые конфиги перестанут работать. После пересоздания скачайте новые "
+                "конфиги и импортируйте их на устройствах клиентов.</p>"
+                f"<form method=post action='{self._url('/clients/regen/confirm')}'>"
+                f"<input type=hidden name=csrf value='{e(csrf)}'>"
+                f"{fields}"
+                "<div class=actions><button>Подтвердить</button>"
+                f"<a class=btn href='{self._url(cancel)}'>Отмена</a>"
+                "</div></form></div>")
+        return self._layout("Пересоздание ключей", "clients", body, csrf)
 
     # ---------- HTTP verbs ----------
     def do_GET(self):
-        u = urllib.parse.urlparse(self.path)
+        u = self._request_url()
+        if u is None:
+            return self._send(404, "not found", "text/plain")
         q = urllib.parse.parse_qs(u.query)
         if u.path in ("/",):
             return self._redirect("/system")
@@ -876,12 +901,11 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/help":
             return self._send_auth(200, self._page_help())
         if u.path == "/faq":
-            return self._send_auth(200, self._page_faq())
+            return self._redirect("/help#faq")
         if u.path == "/instructions":
             return self._send_auth(200, self._page_instructions())
-        if u.path == "/support":
-            return self._send_auth(200, self._page_support())
         if u.path == "/password":
+            s.pending_pw = None
             return self._send_auth(200, self._page_password())
         if u.path == "/clients":
             sort = (q.get("sort", ["name"])[0] or "name")
@@ -926,7 +950,9 @@ class Handler(BaseHTTPRequestHandler):
         return self._send_auth(404, "not found", "text/plain")
 
     def do_POST(self):
-        u = urllib.parse.urlparse(self.path)
+        u = self._request_url()
+        if u is None:
+            return self._send(404, "not found", "text/plain")
         ip = self._client_ip()
         if u.path == "/login":
             if self.auth.blocked(ip):
@@ -1065,12 +1091,14 @@ class Handler(BaseHTTPRequestHandler):
             if r.ok:
                 return self._redirect("/clients")
             return _fail("remove failed", r.rc, r.stderr)
-        if u.path == "/clients/regen":
+        if u.path in ("/clients/regen", "/clients/regen/confirm"):
             names, bad = sel_list()
             if bad:
                 return self._send_auth(200, self._page_clients(f"Плохие имена в выборе: {', '.join(bad[:10])}"))
             if not names:
                 return self._send_auth(200, self._page_clients("Ничего не выбрано для regen"))
+            if u.path == "/clients/regen":
+                return self._send_auth(200, self._page_client_regen_confirm(names))
             try:
                 r = cmd_regen(self.cfg.manage_script, names)
             except ValueError as ex:
@@ -1082,6 +1110,7 @@ class Handler(BaseHTTPRequestHandler):
             return _fail("regen failed", r.rc, r.stderr)
 
         if u.path == "/password":
+            s.pending_pw = None
             old = form.get("old_password", "")
             if isinstance(old, list):
                 old = old[0] if old else ""
@@ -1091,9 +1120,6 @@ class Handler(BaseHTTPRequestHandler):
             new2 = form.get("new_password2", "")
             if isinstance(new2, list):
                 new2 = new2[0] if new2 else ""
-            for _v in (old, new1, new2):
-                if not isinstance(_v, str):
-                    _v = str(_v)
             if not old:
                 return self._send_auth(200, self._page_password("Укажите старый пароль"))
             if not self.auth.verify(s.username, old):
@@ -1105,6 +1131,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_auth(200, self._page_password("Новые пароли не совпадают"))
             if new1 == old:
                 return self._send_auth(200, self._page_password("Новый пароль совпадает со старым"))
+            try:
+                validate_password(new1)
+            except ValueError as ex:
+                return self._send_auth(200, self._page_password(str(ex)))
             s.pending_pw = new1
             return self._send_auth(200, self._page_password_confirm())
 
@@ -1116,13 +1146,14 @@ class Handler(BaseHTTPRequestHandler):
             # Сначала сохраняем в конфиг, потом в память — при ошибке записи
             # пароль нигде не меняется.
             try:
-                update_user_password(self.cfg.config_path, s.username, pw)
+                changed = self.auth.change_password(
+                    s.sid, lambda user, password: update_user_password(self.cfg.config_path, user, password))
             except Exception as ex:
-                sys.stderr.write(f"awg-panel: persist password failed: {ex}\n")
+                sys.stderr.write(f"awg-panel: persist password failed ({type(ex).__name__})\n")
                 return self._send_auth(200, self._page_password(
-                    f"Не удалось сохранить пароль в конфиг: {e(ex)}"))
-            self.auth.users[s.username] = pw
-            s.pending_pw = None
+                    "Не удалось сохранить пароль. Обратитесь к администратору сервера."))
+            if not changed:
+                return self._redirect("/login", self._set_session_cookie(None))
             self.auth.journal(ip, s.username, True, "password changed")
             return self._send_auth(200, self._page_system("Пароль изменён."))
         return self._send_auth(404, "not found", "text/plain")
@@ -1204,7 +1235,7 @@ def _sanitize_redirect_path(path: str | None) -> str:
 
 
 def build_https_redirect_url(host_header: str | None, path: str | None,
-                             https_port: int) -> str | None:
+                             https_port: int, base_url: str = "") -> str | None:
     """https://<host>[:port]<path> or None when Host/port invalid."""
     hostname = _extract_redirect_hostname(host_header)
     if not hostname:
@@ -1216,6 +1247,10 @@ def build_https_redirect_url(host_header: str | None, path: str | None,
     if not 1 <= port <= 65535:
         return None
     safe_path = _sanitize_redirect_path(path)
+    # Opening the host root should reach the panel even when it is mounted
+    # under a prefix. Existing prefixed paths and their queries stay intact.
+    if base_url and safe_path.split("?", 1)[0] == "/":
+        safe_path = normalize_base_url(base_url) + safe_path
     if port == 443:
         return f"https://{hostname}{safe_path}"
     return f"https://{hostname}:{port}{safe_path}"
@@ -1225,6 +1260,7 @@ class HttpToHttpsRedirectHandler(BaseHTTPRequestHandler):
     """Minimal 301 redirector. No cookies, no auth, no static, no state."""
     server_version = f"awg-panel/{__version__}"
     https_port: int = 8443
+    base_url: str = ""
     timeout = 10
 
     def log_request(self, code="-", size="-"):
@@ -1247,7 +1283,7 @@ class HttpToHttpsRedirectHandler(BaseHTTPRequestHandler):
         # leftover bytes must not be parsed as the next request (desync).
         self.close_connection = True
         url = build_https_redirect_url(self.headers.get("Host"), self.path,
-                                       self.https_port)
+                                       self.https_port, self.base_url)
         if url is None:
             self.log_error("code 400, bad Host")
             body = b"bad request\n"
@@ -1302,9 +1338,10 @@ def start_http_redirector(cfg: PanelConfig):
         sys.stderr.write(
             f"awg-panel-redirect: disabled (http_redirect_port == port == {rport})\n")
         return None
-    HttpToHttpsRedirectHandler.https_port = cfg.port
+    redirect_handler = type("ConfiguredRedirectHandler", (HttpToHttpsRedirectHandler,),
+                            {"https_port": cfg.port, "base_url": cfg.base_url})
     try:
-        srv = ThreadingHTTPServer((cfg.host, rport), HttpToHttpsRedirectHandler)
+        srv = ThreadingHTTPServer((cfg.host, rport), redirect_handler)
     except OSError as ex:
         sys.stderr.write(f"awg-panel-redirect: :{rport} disabled ({ex})\n")
         return None
@@ -1317,7 +1354,7 @@ def start_http_redirector(cfg: PanelConfig):
 
 
 # Copy-to-clipboard helper (0.1.6+). Served as /static/copy.js and included
-# via <script src> (COPY_TAG): the CSP header (script-src 'self', 0.1.8+)
+# via <script src>: the CSP header (script-src 'self', 0.1.8+)
 # blocks inline scripts, so this MUST NOT be inlined into pages.
 COPY_JS = """function awgCopyText(t){if(navigator.clipboard&&navigator.clipboard.writeText){return navigator.clipboard.writeText(t)}return Promise.reject(new Error('no clipboard API'))}
 function awgCopyFallback(t){return new Promise(function(res,rej){var ta=document.createElement('textarea');ta.value=t;ta.setAttribute('readonly','');ta.style.position='fixed';ta.style.top='0';ta.style.left='0';ta.style.opacity='0';document.body.appendChild(ta);ta.focus();ta.select();try{var ok=document.execCommand('copy');document.body.removeChild(ta);if(ok){res()}else{rej(new Error('execCommand false'))}}catch(e){try{document.body.removeChild(ta)}catch(_){}rej(e)}})}
@@ -1325,11 +1362,10 @@ function awgCopy(t){var p;try{p=awgCopyText(t)}catch(e){p=Promise.reject(e)}var 
 function awgBindCopy(){document.querySelectorAll('button[data-src]').forEach(function(b){if(b.getAttribute('data-awg-bound')){return}b.setAttribute('data-awg-bound','1');b.addEventListener('click',function(){var el=document.getElementById(b.getAttribute('data-src'));if(!el){return}awgCopy(el.textContent).then(function(){b.textContent='Скопировано';b.classList.add('copied');setTimeout(function(){b.textContent='Скопировать';b.classList.remove('copied')},1500)},function(){b.textContent='Не скопировалось';setTimeout(function(){b.textContent='Скопировать'},1500)})})})}
 if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',awgBindCopy)}else{awgBindCopy()}
 """
-COPY_TAG = '<script src="/static/copy.js" defer></script>'
 
 
 # Clients page helper (0.1.13+). Served as /static/clients.js and included
-# via <script src> (CLIENTS_TAG): the CSP header (script-src 'self', 0.1.8+)
+# via <script src>: the CSP header (script-src 'self', 0.1.8+)
 # blocks inline scripts, so this MUST NOT be inlined into pages.
 # - Delete button (#delbtn) stays disabled until a checkbox is checked.
 # - Generate button (#genbtn) fills #names with prefix + random hex
@@ -1340,12 +1376,17 @@ function awgClientsGen(){var g=document.getElementById('genbtn'),n=document.getE
 function awgClientsInit(){var f=document.getElementById('delf');if(f){f.addEventListener('change',function(ev){var t=ev&&ev.target;if(t&&t.getAttribute&&t.getAttribute('name')==='sel'){awgClientsRefreshDel()}})}var g=document.getElementById('genbtn');if(g){g.addEventListener('click',awgClientsGen)}awgClientsRefreshDel()}
 if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',awgClientsInit)}else{awgClientsInit()}
 """
-CLIENTS_TAG = '<script src="/static/clients.js" defer></script>'
 
 
 STYLE_CSS = """*{box-sizing:border-box}body{margin:0;font:14px/1.45 system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#eef1f5;color:#1f2937;display:flex;min-height:100vh;overflow-x:hidden}
+.login-page{min-height:100vh;min-height:100dvh;align-items:center;justify-content:center}
+.login-page main{flex:0 1 468px;width:100%;max-width:468px;padding:24px}
+.login-page .login-card{width:100%;margin:0}.login-card button{width:100%;margin-top:12px}
+.faq{border:1px solid #e2e8f0;border-radius:6px;margin:10px 0;overflow:hidden}
+.faq summary{padding:12px 14px;cursor:pointer;background:#f8fafc;font-weight:600}
+.faq summary:focus-visible{outline:2px solid #2563eb;outline-offset:-2px}.faq p{padding:0 16px}
 aside{width:220px;background:#1f2937;color:#cbd5e1;display:flex;flex-direction:column;padding:18px 0;flex-shrink:0;position:sticky;top:0;height:100vh;overflow-y:auto}
-.brand{color:#fff;font-weight:700;font-size:18px;padding:0 20px 16px}.brand small{display:block;color:#94a3b8;font-weight:400;font-size:11px}.brand small a{color:#94a3b8}
+.brand{color:#fff;font-weight:700;font-size:18px;padding:0 20px 16px}.brand small{display:block;color:#94a3b8;font-weight:400;font-size:11px}
 nav a{display:block;color:#cbd5e1;text-decoration:none;padding:10px 20px}nav a.on,nav a:hover{background:#374151;color:#fff}
 nav{display:flex;flex-direction:column;flex:1}
 nav form.navlogout{margin:auto 0 0;padding:12px 0 0}nav form.navlogout:before{content:"";display:block;border-top:1px solid #374151;margin-bottom:12px}nav button.navlink{display:block;width:100%;text-align:left;background:none;border:0;color:#cbd5e1;padding:10px 20px;font:inherit;cursor:pointer;border-radius:0}nav button.navlink.on,nav button.navlink:hover{background:#374151;color:#fff}
@@ -1384,7 +1425,9 @@ def run(cfg: PanelConfig):
         ctx.load_cert_chain(cfg.cert, cfg.key)
     except (OSError, ssl.SSLError) as ex:
         raise SystemExit(f"TLS load failed ({cfg.cert}, {cfg.key}): {ex}")
-    srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+    # Defer TLS handshake until the handler thread reads with its timeout.
+    # A client that sends no ClientHello must not block the accept loop.
+    srv.socket = ctx.wrap_socket(srv.socket, server_side=True, do_handshake_on_connect=False)
     start_http_redirector(cfg)
     print(f"awg-panel https://{cfg.host}:{cfg.port} (manage={cfg.manage_script})")
     srv.serve_forever()

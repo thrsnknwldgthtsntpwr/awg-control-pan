@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import configparser
+import ipaddress
 import os
 import re
+import tempfile
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,20 +25,40 @@ CLIENT_NAME_RAND_BYTES_MIN = 1
 CLIENT_NAME_RAND_BYTES_MAX = 32
 # Hard cap from validate.valid_client_name(): prefix + suffix <= 63 chars.
 CLIENT_NAME_MAX_LEN = 63
+_CONFIG_LOCK = threading.Lock()
+
+
+def normalize_base_url(value: str) -> str:
+    """URL path prefix only; never accept an origin or encoded separators."""
+    value = value.strip()
+    if value in ("", "/"):
+        return ""
+    if not re.fullmatch(r"/(?:[A-Za-z0-9_-][A-Za-z0-9._~-]*)(?:/[A-Za-z0-9_-][A-Za-z0-9._~-]*)*/?", value):
+        raise ValueError("config [server] base_url: нужен путь вида /awg, без домена, пробелов и параметров")
+    return value.rstrip("/")
+
+
+def validate_password(password: str) -> None:
+    """ConfigParser strips edge whitespace and treats newlines as INI syntax."""
+    if not isinstance(password, str) or not password.strip():
+        raise ValueError("Пустой пароль запрещён")
+    if password != password.strip() or any(ord(c) < 32 or ord(c) == 127 for c in password):
+        raise ValueError("Пароль не должен содержать управляющие символы или пробелы по краям")
 
 
 @dataclass
 class PanelConfig:
     host: str = "0.0.0.0"
     port: int = 8443
+    base_url: str = ""
+    # Only these immediate peers may supply X-Real-IP. Empty = trust nobody.
+    trusted_proxies: tuple = ()
     # Plain-HTTP redirector: :http_redirect_port -> https://<host>:port/.
     # 0 = disabled (only HTTPS stays). Standard = 80.
     http_redirect_port: int = 80
     cert: str = "/etc/awg-panel/cert.pem"
     key: str = "/etc/awg-panel/key.pem"
     manage_script: str = "/root/awg/manage_amneziawg.sh"
-    awg_dir: str = "/root/awg"
-    server_conf: str = "/etc/amnezia/amneziawg/awg0.conf"
     helper: str = "/usr/sbin/awg-panel-helper"
     auth_log: str = "/var/log/awg-panel/auth.log"
     session_ttl_min: int = 30
@@ -84,10 +107,6 @@ def _parse_users(cp: configparser.ConfigParser) -> dict:
             continue
         raise ValueError(f"config [users]: неизвестный ключ {key!r} (нужны user.N/password.N)")
     idxs = set(user_idx) | set(pass_idx)
-    if not idxs:
-        raise ValueError("config [users]: секция пуста (нужны user.N/password.N)")
-    if len(idxs) > MAX_USERS:
-        raise ValueError(f"config [users]: больше {MAX_USERS} пользователей")
     users: dict[str, str] = {}
     for idx in sorted(idxs):
         if idx not in user_idx:
@@ -105,8 +124,6 @@ def _parse_users(cp: configparser.ConfigParser) -> dict:
         if "\n" in pw or "\r" in pw:
             raise ValueError(f"config [users]: password.{idx}: переводы строк запрещены")
         users[name] = pw.strip("\r\n")
-    if len(users) > MAX_USERS:
-        raise ValueError(f"config [users]: больше {MAX_USERS} пользователей")
     return users
 
 
@@ -127,6 +144,12 @@ def load_config(path: str = "/etc/awg-panel/config.ini") -> PanelConfig:
         raise ValueError(f"config unreadable: {ex}")
     host = (s.get("host", cfg.host) or "").strip() or cfg.host
     cfg.host = host if _HOST_RE.match(host) else "0.0.0.0"
+    cfg.base_url = normalize_base_url(s.get("base_url", ""))
+    try:
+        cfg.trusted_proxies = tuple(ipaddress.ip_network(v, strict=False)
+                                   for v in re.split(r"[\s,]+", s.get("trusted_proxies", "").strip()) if v)
+    except ValueError as ex:
+        raise ValueError("config [server] trusted_proxies: нужны IP-адреса или CIDR через запятую") from ex
     try:
         cfg.port = int(s.get("port", cfg.port))
     except (TypeError, ValueError):
@@ -142,8 +165,6 @@ def load_config(path: str = "/etc/awg-panel/config.ini") -> PanelConfig:
     cfg.cert = (s.get("cert", cfg.cert) or cfg.cert).strip() or cfg.cert
     cfg.key = (s.get("key", cfg.key) or cfg.key).strip() or cfg.key
     cfg.manage_script = (s.get("manage_script", cfg.manage_script) or cfg.manage_script).strip() or cfg.manage_script
-    cfg.awg_dir = (s.get("awg_dir", cfg.awg_dir) or cfg.awg_dir).strip() or cfg.awg_dir
-    cfg.server_conf = (s.get("server_conf", cfg.server_conf) or cfg.server_conf).strip() or cfg.server_conf
     cfg.helper = (s.get("helper", cfg.helper) or cfg.helper).strip() or cfg.helper
     cfg.auth_log = (s.get("auth_log", cfg.auth_log) or cfg.auth_log).strip() or cfg.auth_log
     try:
@@ -171,10 +192,7 @@ def load_config(path: str = "/etc/awg-panel/config.ini") -> PanelConfig:
     elif cfg.auth_lock_minutes > 1440:
         cfg.auth_lock_minutes = 1440
     _parse_client_names(cp, cfg)
-    users = _parse_users(cp)  # raises ValueError -> fail closed at startup
-    if len(users) > MAX_USERS:
-        raise ValueError(f"config [users]: больше {MAX_USERS} пользователей")
-    cfg.users = users
+    cfg.users = _parse_users(cp)  # raises ValueError -> fail closed at startup
     cfg.config_path = path
     return cfg
 
@@ -218,46 +236,46 @@ def _parse_client_names(cp: configparser.ConfigParser, cfg: PanelConfig) -> None
 
 
 def update_user_password(config_path: str, username: str, new_password: str) -> None:
-    """Записать новый пароль пользователя в password.N секции [users] config.ini.
+    """Change only the matching [users] password; replace the file atomically.
 
-    Точечно заменяет только строку password.N, не трогая остальное содержимое
-    файла. После записи права на файл ставятся 0o600 (как у оригинального
-    конфига). Вызывает ValueError, если пользователь не найден.
+    Serialize web writes so two users changing passwords cannot lose updates.
+    Keep comments and other sections; validate the result before replacement.
     """
-    _user_re = re.compile(r"^user\.(\d+)\s*=\s*" + re.escape(username) + r"\s*$")
-    _pass_re = re.compile(r"^password\.(\d+)\s*=")
-
-    with open(config_path, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-
-    target_idx: int | None = None
-    for line in lines:
-        m = _user_re.match(line.strip())
-        if m:
-            target_idx = int(m.group(1))
-            break
-    if target_idx is None:
-        raise ValueError(f"пользователь {username!r} не найден в секции [users]")
-
-    replaced = False
-    for i, line in enumerate(lines):
-        m = _pass_re.match(line.strip())
-        if m and int(m.group(1)) == target_idx:
-            lines[i] = f"password.{target_idx} = {new_password}\n"
-            replaced = True
-            break
-
-    if not replaced:
-        # password.N отсутствует — добавляем сразу после user.N
+    validate_password(new_password)
+    with _CONFIG_LOCK:
+        path = Path(config_path)
+        original = path.read_text(encoding="utf-8")
+        cp = configparser.ConfigParser(interpolation=None)
+        cp.read_string(original)
+        users = _parse_users(cp)
+        if username not in users:
+            raise ValueError("Пользователь не найден в секции [users]")
+        index = next(int(k.split(".")[1]) for k, v in cp["users"].items()
+                     if _USER_KEY_RE.fullmatch(k) and v.strip() == username)
+        lines = original.splitlines(keepends=True)
+        section = None
+        replaced = False
         for i, line in enumerate(lines):
-            if line.strip() == f"user.{target_idx} = {username}":
-                lines.insert(i + 1, f"password.{target_idx} = {new_password}\n")
+            header = re.match(r"\s*\[([^]]+)\]", line)
+            if header:
+                section = header.group(1)
+            key = re.match(r"(\s*password\.(\d+)\s*[:=])", line, re.IGNORECASE)
+            if section == "users" and key and int(key.group(2)) == index:
+                lines[i] = f"{key.group(1)} {new_password}\n"
                 replaced = True
                 break
-
-    if not replaced:
-        raise ValueError(f"не удалось найти password.{target_idx} для записи")
-
-    with open(config_path, "w", encoding="utf-8") as f:
-        f.writelines(lines)
-    os.chmod(config_path, 0o600)
+        if not replaced:
+            raise ValueError("Не найдена строка пароля в секции [users]")
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".config.ini.")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+                os.chmod(tmp, 0o600)
+                f.writelines(lines)
+                f.flush()
+                os.fsync(f.fileno())
+            if load_config(tmp).users[username] != new_password:
+                raise ValueError("Пароль не может быть сохранён в config.ini без изменений")
+            os.replace(tmp, path)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)

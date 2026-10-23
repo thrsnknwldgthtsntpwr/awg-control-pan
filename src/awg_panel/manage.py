@@ -71,7 +71,7 @@ def _check_batch(names: list[str]) -> None:
 def _check_expires_flag(flag: str | None) -> None:
     if flag is None:
         return
-    m = _EXPIRES_ARGV_RE.match(flag) if isinstance(flag, str) else None
+    m = _EXPIRES_ARGV_RE.fullmatch(flag) if isinstance(flag, str) else None
     if not m:
         raise ValueError(f"bad expires flag: {flag!r}")
     if not 1 <= int(m.group(1)) <= 3650:
@@ -113,17 +113,8 @@ def cmd_add(manage_script: str, names: list[str], expires_flag: str | None) -> M
         args.append(expires_flag)
     args.append("add")
     args.extend(names)
-    # NOTE: --yes/--expires go BEFORE the subcommand (manage argparse order).
-    # run_manage prepends --json/--no-color itself, so rebuild order here:
-    cmd = _base(manage_script) + ["--json", "--no-color"] + args
-    try:
-        p = subprocess.run(cmd, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=120)
-    except subprocess.TimeoutExpired:
-        return ManageResult(False, 124, None, "timeout add")
-    except OSError:
-        return ManageResult(False, 127, None, "cannot run manage script")
-    return _parse(p)
+    # --yes/--expires go BEFORE the subcommand (manage argparse order).
+    return run_manage(manage_script, *args, timeout=120)
 
 
 def cmd_remove(manage_script: str, names: list[str]) -> ManageResult:
@@ -131,15 +122,7 @@ def cmd_remove(manage_script: str, names: list[str]) -> ManageResult:
         if not valid_client_name(n):
             raise ValueError(f"bad name: {n}")
     _check_batch(names)
-    cmd = _base(manage_script) + ["--json", "--no-color", "--yes", "remove"] + names
-    try:
-        p = subprocess.run(cmd, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=120)
-    except subprocess.TimeoutExpired:
-        return ManageResult(False, 124, None, "timeout remove")
-    except OSError:
-        return ManageResult(False, 127, None, "cannot run manage script")
-    return _parse(p)
+    return run_manage(manage_script, "--yes", "remove", *names, timeout=120)
 
 
 def cmd_regen(manage_script: str, names: list[str]) -> ManageResult:
@@ -148,10 +131,6 @@ def cmd_regen(manage_script: str, names: list[str]) -> ManageResult:
             raise ValueError(f"bad name: {n}")
     _check_batch(names)
     return run_manage(manage_script, "--yes", "regen", *names, timeout=120)
-
-
-def _parse(p: "subprocess.CompletedProcess[str]") -> ManageResult:
-    return _parse_json_output(p.stdout, p.returncode, p.stderr)
 
 
 def _systemctl_base() -> list[str]:

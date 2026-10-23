@@ -29,7 +29,8 @@
 
 - **Доверенные:** root сервера, код инсталлера (`manage_amneziawg.sh`), kernel/`/proc`.
 - **Недоверенные:** всё из браузера (формы, куки, имена клиентов, `Content-Length`).
-- **Актив:** панель слушает HTTPS напрямую (self-signed), rate-limit — по socket-IP, `X-Forwarded-For` игнорируется.
+- **Актив:** панель слушает HTTPS напрямую или за nginx. Rate-limit — по socket-IP,
+  либо по `X-Real-IP` от явно заданного `trusted_proxies`. `X-Forwarded-For` игнорируется.
 
 Панель осознанно **не** защищает от:
 
@@ -48,10 +49,13 @@
 - Rate-limit логина средствами сервиса (без `iptables/ufw/nftables`): `auth_max_attempts` неверных → блок IP на `auth_lock_minutes` (`429`, дефолт `5/5мин`), GC с cap 10000 IP (evict oldest, чтобы флуд случайными IP не разблокировал атакующего).
 - Журнал входов: `/var/log/awg-panel/auth.log` (`0600`, `O_APPEND`, поля без `\r\n`, обрезка длин).
 - Logout — только `POST` с CSRF (`GET /logout` — лишь подтверждение, сессию не убивает).
+- Смена пароля требует старый пароль, CSRF и подтверждение; запись в INI атомарная,
+  другие сессии этого пользователя отзываются после успешной записи.
+- При `base_url` cookie ограничивается этим путём, например `Path=/awg/`.
 
 ### CSRF / заголовки / лимиты
 
-- Все POST с CSRF-токеном из сессии; редиректы после POST — `303`.
+- POST авторизованных действий требуют CSRF-токен из сессии; редиректы после POST — `303`.
 - Заголовки на всех ответах: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `CSP: default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'`, `HSTS max-age=31536000`, `Permissions-Policy: camera=(), microphone=(), geolocation=()`, `Cache-Control: no-store` (кроме статики с `max-age=3600`).
 - Лимиты: тело форм 1 МиБ (превышение → `413` + разрыв keep-alive против desync), max 2000 полей, max 100 имён в батче, stdout `manage` 1 МиБ, helper-ответы 2 МиБ, socket timeout 10 с, ожидание `manage`-фьючерсов `40 с`, `405` на `HEAD/PUT/DELETE/PATCH/OPTIONS`.
 - Инлайн-`<script>` запрещён CSP — весь JS в same-origin `/static/copy.js` (без CDN/HTMX с 0.1.8).
@@ -66,7 +70,10 @@
 
 ### Файлы и секреты
 
-- Пароли в `config.ini` в открытом виде (`600 root:root`, атомарная запись `mkstemp+replace`, `umask 077`); `%` разрешён (`interpolation=None`); пробелы в пароле значимы; битый ini → дефолты, а не падение (кроме ошибок `[users]` и дублей опций — там отказ старта).
+- Пароли в `config.ini` в открытом виде (`600 root:root`, атомарная запись `mkstemp+replace`);
+  `%` и пробелы внутри разрешены (`interpolation=None`). При смене пароля запрещены
+  управляющие символы и пробелы по краям, которые INI не сохраняет точно.
+  Битый INI, ошибки `[users]` и невалидные настройки прокси приводят к отказу старта.
 - `key.pem` создаётся под `umask 077` (без окна `644`), сразу `600 root:root`; `cert.pem` — `644`.
 - `.deb` собирается `root-owned` (`chown -R 0:0` + `--root-owner-group`) — иначе повторение бага `0.1.1` (файл с `uid 1001` ломал sudo на цели).
 

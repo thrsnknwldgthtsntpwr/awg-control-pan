@@ -21,7 +21,7 @@ class Session:
     expires: float
     ip: str
     username: str = ""
-    pending_pw: str | None = None
+    pending_pw: str | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -115,10 +115,6 @@ class AuthStore:
             if not s:
                 return None
             now = time.time()
-            if now - s.created > self.max_lifetime_sec:
-                # Absolute lifetime exceeded: force re-login.
-                self.sessions.pop(sid, None)
-                return None
             # Sliding expiry, capped by absolute lifetime.
             s.expires = min(now + self.ttl_sec, s.created + self.max_lifetime_sec)
             return s
@@ -126,6 +122,22 @@ class AuthStore:
     def destroy(self, sid: str) -> None:
         with self._lock:
             self.sessions.pop(sid, None)
+
+    def change_password(self, sid: str, persist) -> bool:
+        """Persist the pending password, then revoke this user's other sessions."""
+        with self._lock:
+            self._gc_locked()
+            session = self.sessions.get(sid)
+            if session is None or session.pending_pw is None:
+                return False
+            password = session.pending_pw
+            persist(session.username, password)
+            self.users[session.username] = password
+            session.pending_pw = None
+            for key, other in list(self.sessions.items()):
+                if other.username == session.username and key != sid:
+                    self.sessions.pop(key, None)
+            return True
 
     def gc(self) -> None:
         with self._lock:
@@ -144,14 +156,13 @@ class AuthStore:
     def _gc_fails_locked(self) -> None:
         now = time.time()
         for k, v in list(self.fails.items()):
-            _c, until, last = v if len(v) == 3 else (v[0], v[1], 0.0)
+            _c, until, last = v
             if until <= now and (now - last) > 600:
                 self.fails.pop(k, None)
         if len(self.fails) > 10000:
             # Evict oldest entries instead of clear(): a flood of random
             # IPs must not unblock the real attacker.
-            by_last = sorted(self.fails.items(),
-                             key=lambda kv: kv[1][2] if len(kv[1]) >= 3 else 0.0)
+            by_last = sorted(self.fails.items(), key=lambda kv: kv[1][2])
             for k, _ in by_last[:1000]:
                 self.fails.pop(k, None)
 
@@ -162,17 +173,14 @@ class AuthStore:
             c = self.fails.get(_clean(ip, 64))
             if not c:
                 return False
-            until = c[1] if len(c) >= 2 else 0.0
-            return bool(until > time.time())
+            return bool(c[1] > time.time())
 
     def note_fail(self, ip: str) -> None:
         with self._lock:
             self._gc_fails_locked()
             ip = _clean(ip, 64)
             now = time.time()
-            cur = self.fails.get(ip, (0, 0.0, 0.0))
-            c = cur[0] if len(cur) >= 1 else 0
-            until = cur[1] if len(cur) >= 2 else 0.0
+            c, until, _last = self.fails.get(ip, (0, 0.0, 0.0))
             c += 1
             if c >= self.max_attempts:
                 until = now + self.lock_sec

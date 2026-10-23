@@ -34,6 +34,17 @@ class TestValidate(unittest.TestCase):
 
 
 class TestAuth(unittest.TestCase):
+    def test_session_expiry_remains_enforced(self):
+        import time
+        st = AuthStore({"admin": "pw"}, ttl_sec=60, max_lifetime_sec=120)
+        expired = st.create("127.0.0.1", "admin")
+        expired.expires = time.time() - 1
+        self.assertIsNone(st.get(expired.sid))
+        absolute = st.create("127.0.0.1", "admin")
+        absolute.created = time.time() - 121
+        absolute.expires = time.time() + 60
+        self.assertIsNone(st.get(absolute.sid))
+
     def test_verify_config_credentials(self):
         st = AuthStore({"admin": "s3cret-password"}, "/tmp/nonexistent-auth.log", 60)
         self.assertTrue(st.verify("admin", "s3cret-password"))
@@ -91,6 +102,19 @@ class TestAuth(unittest.TestCase):
 
 
 class TestConfig(unittest.TestCase):
+    def test_obsolete_paths_are_ignored(self):
+        import tempfile
+        from awg_panel.config import load_config
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.ini"
+            path.write_text("[server]\nawg_dir=/unused\nserver_conf=/unused.conf\n"
+                            "[users]\nuser.1=admin\npassword.1=pw\n")
+            cfg = load_config(str(path))
+        self.assertEqual(cfg.manage_script, "/root/awg/manage_amneziawg.sh")
+        self.assertEqual(cfg.helper, "/usr/sbin/awg-panel-helper")
+        self.assertFalse(hasattr(cfg, "awg_dir"))
+        self.assertFalse(hasattr(cfg, "server_conf"))
+
     def test_clamp(self):
         import tempfile
         from awg_panel.config import load_config
@@ -308,6 +332,34 @@ class TestClientNames(unittest.TestCase):
 
 
 class TestManage(unittest.TestCase):
+    def test_mutation_errors_and_timeouts(self):
+        import subprocess
+        from unittest.mock import patch
+        from awg_panel import manage
+        for command, args in ((manage.cmd_add, (["alice"], "--expires=7d")),
+                              (manage.cmd_remove, (["alice"],)),
+                              (manage.cmd_regen, (["alice"],))):
+            for error, rc in ((subprocess.TimeoutExpired("manage", 120), 124),
+                              (OSError("cannot execute"), 127)):
+                with self.subTest(command=command.__name__, error=type(error).__name__):
+                    with patch.object(manage.subprocess, "run", side_effect=error) as run:
+                        result = command("/manage.sh", *args)
+                    self.assertFalse(result.ok)
+                    self.assertEqual(result.rc, rc)
+                    self.assertEqual(run.call_args.kwargs["timeout"], 120)
+            with patch.object(manage.subprocess, "run", return_value=
+                              subprocess.CompletedProcess([], 1, '{"ok":false}', "failed")):
+                self.assertFalse(command("/manage.sh", *args).ok)
+
+    def test_invalid_expires_rejected_before_execution(self):
+        from unittest.mock import patch
+        from awg_panel import manage
+        with patch.object(manage.subprocess, "run") as run:
+            for flag in ("--expires=7d\n", "--expires=0d", "--expires=3651d", "--expires=7h"):
+                with self.subTest(flag=flag), self.assertRaises(ValueError):
+                    manage.cmd_add("/manage.sh", ["alice"], flag)
+            run.assert_not_called()
+
     def test_parse_ok_flag(self):
         from awg_panel.manage import _parse_json_output
         r = _parse_json_output('{"ok": true, "x": 1}', 0, "")
@@ -562,7 +614,7 @@ class TestClientPage(unittest.TestCase):
         self.assertIn(".actions form{margin:0}", STYLE_CSS)
 
     def test_copy_buttons_conf_and_vpn(self):
-        from awg_panel.server import COPY_JS, COPY_TAG
+        from awg_panel.server import COPY_JS
         body = self._render_client()
         i_conf_pre = body.index('id=conf-pre')
         i_vpn_pre = body.index('id=vpn-pre')
@@ -574,7 +626,7 @@ class TestClientPage(unittest.TestCase):
         # 0.1.9: CSP (script-src 'self') forbids inline scripts, so the page
         # only references the external file; the logic itself is asserted
         # against COPY_JS below and served by test_copy_js_static_route.
-        self.assertIn(COPY_TAG, body)
+        self.assertIn('<script src="/static/copy.js" defer></script>', body)
         self.assertIn('/static/copy.js', body)
         self.assertNotIn("navigator.clipboard.writeText", body)
         self.assertIn("navigator.clipboard.writeText", COPY_JS)
@@ -671,8 +723,8 @@ class TestClientsListPage(unittest.TestCase):
         # JS включает/выключает её по чекбоксам (внешний файл, не инлайн)
         self.assertNotIn("getRandomValues", body)
         self.assertNotIn("<script>", body)
-        from awg_panel.server import CLIENTS_JS, CLIENTS_TAG
-        self.assertIn(CLIENTS_TAG, body)
+        from awg_panel.server import CLIENTS_JS
+        self.assertIn('<script src="/static/clients.js" defer></script>', body)
         self.assertIn("getElementById('delbtn')", CLIENTS_JS)
         self.assertIn("b.disabled=!any", CLIENTS_JS)
         self.assertIn("DOMContentLoaded", CLIENTS_JS)
@@ -818,10 +870,10 @@ class TestLoginPage(unittest.TestCase):
 
     def test_no_nav_on_login(self):
         body = self._page()
-        # синий сайдбар с заголовком остался, пунктов меню нет
-        self.assertIn("<aside>", body)
-        self.assertIn("AWG Panel", body)
-        self.assertIn("<nav></nav>", body)
+        # На входе только форма; бренд, версия и сайдбар отсутствуют.
+        self.assertNotIn("<aside", body)
+        self.assertNotIn("AWG Panel", body)
+        self.assertNotIn("<nav", body)
         self.assertNotIn(">Система<", body)
         self.assertNotIn(">Клиенты<", body)
         self.assertNotIn(">Справка<", body)
@@ -834,11 +886,11 @@ class TestLoginPage(unittest.TestCase):
     def test_login_error_shown_without_nav(self):
         body = self._page("Неверный логин или пароль")
         self.assertIn("Неверный логин или пароль", body)
-        self.assertIn("<nav></nav>", body)
+        self.assertNotIn("<nav", body)
 
     def test_autofocus_on_username(self):
         body = self._page()
-        self.assertIn("<input name=user autofocus>", body)
+        self.assertIn("name=user autocomplete=username autofocus required", body)
         self.assertEqual(body.count("autofocus"), 1)
 
     def test_nav_present_elsewhere(self):
@@ -1147,41 +1199,33 @@ class TestSystemPage(unittest.TestCase):
         with self.assertRaises(ValueError):
             manage.run_helper("/usr/sbin/awg-panel-helper", "reboot")
         h, _ = self._handler()
-        actions = h._actions_block("t")
+        actions = h._actions_block()
         self.assertIn("systemctl restart awg-quick@awg0", actions)
 
 
 class TestHelpPage(unittest.TestCase):
-    def test_help_no_github_links(self):
+    def test_help_contains_faq_and_no_commercial_support(self):
         from types import SimpleNamespace
-        from awg_panel import server as srv
+        from awg_panel.server import Handler
         from awg_panel.config import PanelConfig
-        h = srv.Handler.__new__(srv.Handler)
+        h = Handler.__new__(Handler)
         h.cfg = PanelConfig()
         h._sess = lambda: SimpleNamespace(csrf="t")
         body = h._page_help()
-        self.assertIn("<h1>Справка</h1>", body)
-        self.assertNotIn("github.com", body)
-        self.assertNotIn("amneziawg-installer", body)
-        # активная навигация — справка
+        self.assertIn('<h1>Справка</h1>', body)
         self.assertIn('href="/help" class="on"', body)
-        # ссылки на разделы справочной системы
-        self.assertIn("href='/faq'", body)
         self.assertIn("href='/instructions'", body)
-
-
-class TestSupportPage(unittest.TestCase):
-    def test_support_page(self):
-        from types import SimpleNamespace
-        from awg_panel import server as srv
-        from awg_panel.config import PanelConfig
-        h = srv.Handler.__new__(srv.Handler)
-        h.cfg = PanelConfig()
-        h._sess = lambda: SimpleNamespace(csrf="t")
-        body = h._page_support()
-        self.assertIn("<h1>Поддержка</h1>", body)
-        self.assertIn("t.me/thrsnknwldgthtsntpwr", body)
-        self.assertIn('href="/support" class="on"', body)
+        self.assertIn('github.com/thrsnknwldgthtsntpwr/awg-control-pan', body)
+        self.assertNotIn('/support', body)
+        self.assertNotIn('t.me/', body)
+        self.assertNotIn('коммерческ', body)
+        for question in ("Как добавить пользователя?", "Как удалить пользователя?",
+                         "Как посмотреть QR-код?", "Как сменить пароль учётной записи?",
+                         "Как перезагрузить сервер?", "Как перезапустить AWG?",
+                         "Как пересоздать ключи клиента?"):
+            self.assertIn(f'<summary>{question}</summary>', body)
+        self.assertEqual(body.count('<details class=faq'), 10)
+        self.assertEqual(body.count('</details>'), 10)
 
 
 class TestPasswordPage(unittest.TestCase):
@@ -1212,27 +1256,6 @@ class TestPasswordPage(unittest.TestCase):
         self.assertIn("/password/confirm", body)
 
 
-class TestFAQPage(unittest.TestCase):
-    def test_faq_page(self):
-        from types import SimpleNamespace
-        from awg_panel import server as srv
-        from awg_panel.config import PanelConfig
-        h = srv.Handler.__new__(srv.Handler)
-        h.cfg = PanelConfig()
-        h._sess = lambda: SimpleNamespace(csrf="t")
-        body = h._page_faq()
-        self.assertIn("<h1>FAQ по панели управления</h1>", body)
-        self.assertIn("Как добавить пользователя", body)
-        self.assertIn("Как сменить пароль учётной записи", body)
-        self.assertIn("Как перезагрузить сервер", body)
-        self.assertIn("Как перезапустить AWG", body)
-        self.assertIn("Как удалить клиента", body)
-        self.assertIn("Как пересоздать ключи клиента (regen)", body)
-        # аккордеон: details/summary
-        self.assertIn("<details class=faq", body)
-        self.assertIn("<summary", body)
-
-
 class TestInstructionsPage(unittest.TestCase):
     def test_instructions_page(self):
         from types import SimpleNamespace
@@ -1252,6 +1275,376 @@ class TestInstructionsPage(unittest.TestCase):
         # аккордеон: details/summary
         self.assertIn("<details class=acc", body)
         self.assertIn("<summary", body)
+
+
+class TestProxyConfig(unittest.TestCase):
+    def test_base_url_normalization_and_rejection(self):
+        from awg_panel.config import normalize_base_url
+        for value, expected in (("", ""), ("/", ""), ("/awg/", "/awg"),
+                                ("/tools/awg", "/tools/awg")):
+            self.assertEqual(normalize_base_url(value), expected)
+        for value in ("https://example.com/awg", "awg", "//host", "/a//b", "/a/../b",
+                      "/a/./b", "/a%2fb", "/a?b", "/a#b", "/a;b", "/a\\b", "/a\nb"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                normalize_base_url(value)
+
+    def test_load_proxy_settings(self):
+        import tempfile
+        import ipaddress
+        from awg_panel.config import load_config
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.ini"
+            path.write_text("[server]\nbase_url=/tools/awg/\n"
+                            "trusted_proxies=127.0.0.1, ::1/128\n"
+                            "[users]\nuser.1=admin\npassword.1=test\n", encoding="utf-8")
+            cfg = load_config(str(path))
+            self.assertEqual(cfg.base_url, "/tools/awg")
+            self.assertEqual(cfg.trusted_proxies, (ipaddress.ip_network("127.0.0.1/32"),
+                                                  ipaddress.ip_network("::1/128")))
+            path.write_text(path.read_text().replace("127.0.0.1, ::1/128", "bad-proxy"))
+            with self.assertRaises(ValueError):
+                load_config(str(path))
+
+    def test_forwarded_ip_only_from_explicitly_trusted_peer(self):
+        import ipaddress
+        from email.message import Message
+        from awg_panel.config import PanelConfig
+        from awg_panel.server import Handler
+        h = Handler.__new__(Handler)
+        h.cfg = PanelConfig()
+        h.headers = Message()
+        h.headers["X-Real-IP"] = "198.51.100.7"
+        h.headers["X-Forwarded-For"] = "192.0.2.99"
+        h.client_address = ("127.0.0.1", 1234)
+        self.assertEqual(h._client_ip(), "127.0.0.1")
+        h.cfg.trusted_proxies = (ipaddress.ip_network("127.0.0.1/32"),)
+        self.assertEqual(h._client_ip(), "198.51.100.7")
+        h.client_address = ("192.0.2.1", 1234)
+        self.assertEqual(h._client_ip(), "192.0.2.1")
+        h.client_address = ("127.0.0.1", 1234)
+        for value in ("not-an-ip", "198.51.100.7, 192.0.2.1", "fe80::1%eth0", ""):
+            h.headers.replace_header("X-Real-IP", value)
+            self.assertEqual(h._client_ip(), "127.0.0.1")
+        h.headers.replace_header("X-Real-IP", "2001:db8::7")
+        self.assertEqual(h._client_ip(), "2001:db8::7")
+        h.headers["X-Real-IP"] = "192.0.2.1"
+        self.assertEqual(h._client_ip(), "127.0.0.1")
+
+
+class TestReviewRegressions(unittest.TestCase):
+    def test_parallel_deadline_does_not_wait_for_hung_call(self):
+        import threading
+        import time
+        from unittest.mock import patch
+        from awg_panel.server import _parallel_calls
+        release = threading.Event()
+        finished = threading.Event()
+        def hung():
+            release.wait(timeout=2)
+            finished.set()
+        try:
+            start = time.monotonic()
+            with patch("awg_panel.server.FUT_TIMEOUT", 0.02), self.assertRaises(TimeoutError):
+                _parallel_calls((hung,))
+            self.assertLess(time.monotonic() - start, 0.5)
+            self.assertFalse(finished.is_set())
+        finally:
+            release.set()
+            self.assertTrue(finished.wait(timeout=2))
+
+    def test_journal_reads_only_ten_lines_into_memory(self):
+        import io
+        from unittest.mock import patch
+        from awg_panel.config import PanelConfig
+        from awg_panel.server import Handler
+        handler = Handler.__new__(Handler)
+        handler.cfg = PanelConfig()
+        stream = io.StringIO("".join(f"entry-{i}\n" for i in range(1000)))
+        with patch("builtins.open", return_value=stream), patch.object(
+                stream, "read", side_effect=AssertionError("unbounded journal read")):
+            page = handler._journal_block()
+        self.assertIn("entry-999", page)
+        self.assertIn("entry-990", page)
+        self.assertNotIn("entry-989", page)
+        self.assertLess(page.index("entry-999"), page.index("entry-990"))
+
+    def test_prefixed_http_redirect_lands_on_panel(self):
+        from awg_panel.server import build_https_redirect_url
+        self.assertEqual(build_https_redirect_url("example.com", "/?a=1", 8443, "/tools/awg"),
+                         "https://example.com:8443/tools/awg/?a=1")
+        self.assertEqual(build_https_redirect_url("example.com", "/tools/awg/login?a=1", 443, "/tools/awg"),
+                         "https://example.com/tools/awg/login?a=1")
+
+    def test_names_reject_trailing_newline(self):
+        from awg_panel.manage import cmd_regen, run_helper
+        self.assertFalse(valid_client_name("alice\n"))
+        with self.assertRaises(ValueError):
+            cmd_regen("unused", ["alice\n"])
+        with self.assertRaises(ValueError):
+            run_helper("unused", "client-conf", "alice\n")
+
+    def test_descending_sort_preserves_name_order_for_ties(self):
+        from awg_panel.server import sort_clients
+        clients = [{"name": name, "status_code": "active", "expires_at": 100}
+                   for name in ("bob", "alice")]
+        for key in ("status", "expires"):
+            self.assertEqual([c["name"] for c in sort_clients(clients, {}, key, "desc")],
+                             ["alice", "bob"])
+
+    def test_password_write_is_section_aware_and_atomic(self):
+        import tempfile
+        from unittest.mock import patch
+        from awg_panel.config import load_config, update_user_password
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.ini"
+            original = ("[server]\nuser.1 = admin\npassword.1 = leave-me\n"
+                        "[users]\n# Keep this comment\nUSER.01: admin\nPASSWORD.01: old\n"
+                        "user.2=guest\npassword.2=guestpass\n")
+            path.write_text(original, encoding="utf-8")
+            for pw in ("\n[server]\nhost=bad", "pw\r\nuser.3=evil", "\t", " pass", "pass ", "x\x00"):
+                with self.subTest(pw=repr(pw)), self.assertRaises(ValueError):
+                    update_user_password(str(path), "admin", pw)
+                self.assertEqual(path.read_text(), original)
+            with patch("awg_panel.config.os.replace", side_effect=OSError("disk error")):
+                with self.assertRaises(OSError):
+                    update_user_password(str(path), "admin", "new")
+            self.assertEqual(path.read_text(), original)
+            self.assertEqual(list(Path(tmp).iterdir()), [path])
+            update_user_password(str(path), "admin", "new % # ; пароль")
+            self.assertEqual(load_config(str(path)).users["admin"], "new % # ; пароль")
+            self.assertIn("password.1 = leave-me", path.read_text())
+            self.assertIn("# Keep this comment", path.read_text())
+            self.assertEqual(load_config(str(path)).users["guest"], "guestpass")
+
+    def test_concurrent_password_writes_preserve_both_users(self):
+        import tempfile
+        from concurrent.futures import ThreadPoolExecutor
+        from awg_panel.config import load_config, update_user_password
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.ini"
+            path.write_text("[users]\nuser.1=a\npassword.1=old-a\nuser.2=b\npassword.2=old-b\n")
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(update_user_password, str(path), name, "new-" + name)
+                           for name in ("a", "b")]
+                for future in futures:
+                    future.result()
+            self.assertEqual(load_config(str(path)).users, {"a": "new-a", "b": "new-b"})
+
+
+class TestPanelHTTP(unittest.TestCase):
+    """Real handler/HTTP/cookies, with only installer and host operations mocked."""
+
+    def setUp(self):
+        import tempfile
+        import threading
+        from contextlib import ExitStack
+        from http.server import ThreadingHTTPServer
+        from unittest.mock import patch
+        from awg_panel import server
+        from awg_panel.config import load_config
+        from awg_panel.manage import ManageResult
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.tmp = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
+        self.config = self.tmp / "config.ini"
+        self.config.write_text("[server]\nbase_url=/tools/awg\ntrusted_proxies=127.0.0.1\n"
+                               "[users]\nuser.1=admin\npassword.1=old\nuser.2=guest\npassword.2=guest\n")
+
+        class TestHandler(server.Handler):
+            def log_message(self, *args):
+                pass
+
+        self.handler = TestHandler
+        self.handler.cfg = load_config(str(self.config))
+        self.handler.auth = AuthStore(dict(self.handler.cfg.users), str(self.tmp / "auth.log"))
+        client = {"name": "alice", "ip": "10.0.0.2", "status_code": "active"}
+        for name, data in (("cmd_list", [client]), ("cmd_stats", []), ("cmd_check", {})):
+            self.stack.enter_context(patch.object(server, name, return_value=ManageResult(True, 0, data, "")))
+        self.stack.enter_context(patch.object(server, "run_helper", return_value=(0, b"sample-client-data", "")))
+        self.actions = {}
+        for name in ("cmd_add", "cmd_remove", "cmd_regen", "cmd_awg_restart", "_schedule_reboot"):
+            self.actions[name] = self.stack.enter_context(
+                patch.object(server, name, return_value=ManageResult(True, 0, {}, "")))
+        self.http = ThreadingHTTPServer(("127.0.0.1", 0), self.handler)
+        self.thread = threading.Thread(target=self.http.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        self.thread.start()
+        self.addCleanup(self.stop_server)
+        self.base = "/tools/awg"
+
+    def stop_server(self):
+        self.http.shutdown()
+        self.http.server_close()
+        self.thread.join(timeout=3)
+
+    def request(self, method, path, form=None, cookie=None, headers=None):
+        import http.client
+        from urllib.parse import urlencode
+        conn = http.client.HTTPConnection("127.0.0.1", self.http.server_port, timeout=5)
+        head = dict(headers or {})
+        if cookie:
+            head["Cookie"] = cookie
+        if form is not None:
+            head["Content-Type"] = "application/x-www-form-urlencoded"
+        try:
+            conn.request(method, path, urlencode(form, doseq=True) if form is not None else None, head)
+            response = conn.getresponse()
+            return response.status, dict(response.getheaders()), response.read()
+        finally:
+            conn.close()
+
+    def login(self):
+        code, headers, _ = self.request("POST", self.base + "/login", {"user": "admin", "password": "old"})
+        self.assertEqual(code, 303)
+        self.assertEqual(headers["Location"], self.base + "/system")
+        self.assertIn("Path=" + self.base + "/;", headers["Set-Cookie"])
+        cookie = headers["Set-Cookie"].split(";", 1)[0]
+        return cookie, self.handler.auth.get(cookie.split("=", 1)[1])
+
+    def test_login_and_logout_root_and_nested_prefix(self):
+        for base in ("", "/awg", "/tools/awg"):
+            self.base = self.handler.cfg.base_url = base
+            status, _, body = self.request("GET", base + "/login")
+            self.assertEqual(status, 200)
+            self.assertNotIn(b"AWG Panel", body)
+            self.assertNotIn(b"<aside", body)
+            self.assertIn(b'login-page', body)
+            cookie, session = self.login()
+            self.assertEqual(self.request("POST", base + "/logout", {"csrf": "wrong"}, cookie)[0], 403)
+            status, head, _ = self.request("POST", base + "/logout", {"csrf": session.csrf}, cookie)
+            self.assertEqual(status, 303)
+            self.assertEqual(head["Location"], base + "/login")
+            self.assertIn("Path=" + base + "/;", head["Set-Cookie"])
+            self.assertIn("Max-Age=0", head["Set-Cookie"])
+            self.assertIsNone(self.handler.auth.get(session.sid))
+
+    def test_every_page_url_and_asset_stays_under_prefix(self):
+        from html.parser import HTMLParser
+        urls = []
+        class Links(HTMLParser):
+            def handle_starttag(self, tag, attrs):
+                urls.extend(value for key, value in attrs if key in ("href", "src", "action") and value)
+        cookie, session = self.login()
+        for path in ("/system", "/system/reboot", "/system/awg-restart", "/clients?sort=ip&dir=desc",
+                     "/client?name=alice", "/help", "/instructions", "/password", "/logout"):
+            with self.subTest(path=path):
+                status, headers, body = self.request("GET", self.base + path, cookie=cookie)
+                self.assertEqual(status, 200)
+                self.assertIn("Path=" + self.base + "/;", headers["Set-Cookie"])
+                Links().feed(body.decode())
+        status, _, body = self.request("POST", self.base + "/clients/delete",
+                                       {"sel": "alice", "csrf": session.csrf}, cookie)
+        self.assertEqual(status, 200)
+        Links().feed(body.decode())
+        for url in urls:
+            if not url.startswith("https://"):
+                self.assertTrue(url.startswith(self.base + "/"), url)
+        self.assertIn(self.base + "/static/clients.js", urls)
+        self.assertIn(self.base + "/static/copy.js", urls)
+        for path, ctype in (("/static/style.css", "text/css"), ("/static/copy.js", "application/javascript"),
+                            ("/static/clients.js", "application/javascript"), ("/client-qr?name=alice", "image/png"),
+                            ("/download?name=alice&type=conf", "application/octet-stream")):
+            status, headers, _ = self.request("GET", self.base + path, cookie=cookie)
+            self.assertEqual(status, 200)
+            self.assertTrue(headers["Content-Type"].startswith(ctype))
+        self.assertEqual(self.request("GET", self.base + "/faq", cookie=cookie)[1]["Location"], self.base + "/help#faq")
+        self.assertEqual(self.request("GET", self.base + "/support", cookie=cookie)[0], 404)
+
+    def test_prefix_boundary_and_query(self):
+        for path in ("/login", "/tools/awg-evil/login", "/tools/awgx/login", "/tools/awg%2flogin"):
+            for method in ("GET", "POST"):
+                self.assertEqual(self.request(method, path)[0], 404)
+        self.assertEqual(self.request("GET", self.base)[1]["Location"], self.base + "/system")
+        self.assertEqual(self.request("GET", self.base + "/")[1]["Location"], self.base + "/system")
+        self.assertEqual(self.request("GET", self.base + "/clients")[1]["Location"], self.base + "/login")
+
+    def test_mutations_csrf_and_redirects(self):
+        cookie, session = self.login()
+        status, _, _ = self.request("POST", self.base + "/clients/add", {"names": "alice"}, cookie)
+        self.assertEqual(status, 403)
+        self.actions["cmd_add"].assert_not_called()
+        for path, form, command, redirect in (
+            ("/clients/add", {"names": "alice", "days": "7"}, "cmd_add", "/clients"),
+            ("/clients/delete/confirm", {"sel": "alice"}, "cmd_remove", "/clients"),
+            ("/clients/regen/confirm", {"sel": "alice"}, "cmd_regen", "/client?name=alice")):
+            status, headers, _ = self.request("POST", self.base + path, dict(form, csrf=session.csrf), cookie)
+            self.assertEqual(status, 303)
+            self.assertEqual(headers["Location"], self.base + redirect)
+            self.actions[command].assert_called_once()
+
+    def test_regen_requires_confirmation_and_csrf(self):
+        cookie, session = self.login()
+        form = {"sel": "alice", "csrf": session.csrf}
+        status, _, body = self.request("POST", self.base + "/clients/regen", form, cookie)
+        self.assertEqual(status, 200)
+        self.assertIn((self.base + "/clients/regen/confirm").encode(), body)
+        self.assertIn((self.base + "/client?name=alice").encode(), body)
+        self.assertIn("Старые конфиги перестанут работать".encode(), body)
+        self.actions["cmd_regen"].assert_not_called()
+        self.assertEqual(self.request("POST", self.base + "/clients/regen/confirm",
+                                     {"sel": "alice", "csrf": "wrong"}, cookie)[0], 403)
+        self.actions["cmd_regen"].assert_not_called()
+        status, headers, _ = self.request("POST", self.base + "/clients/regen/confirm", form, cookie)
+        self.assertEqual(status, 303)
+        self.assertEqual(headers["Location"], self.base + "/client?name=alice")
+        self.actions["cmd_regen"].assert_called_once_with(self.handler.cfg.manage_script, ["alice"])
+
+    def test_form_field_limit_rejects_before_mutation(self):
+        from awg_panel.server import MAX_FORM_FIELDS
+        cookie, session = self.login()
+        status, _, _ = self.request("POST", self.base + "/clients/add",
+                                    {"csrf": session.csrf, "names": ["alice"] * MAX_FORM_FIELDS}, cookie)
+        self.assertEqual(status, 413)
+        self.actions["cmd_add"].assert_not_called()
+
+    def test_proxy_login_limit_and_journal_use_real_ip(self):
+        self.handler.auth.max_attempts = 1
+        form = {"user": "admin", "password": "wrong"}
+        headers = {"X-Real-IP": "198.51.100.10"}
+        self.assertEqual(self.request("POST", self.base + "/login", form, headers=headers)[0], 200)
+        self.assertEqual(self.request("POST", self.base + "/login", form, headers=headers)[0], 429)
+        other = {"X-Real-IP": "198.51.100.11", "X-Forwarded-For": "192.0.2.99"}
+        self.assertEqual(self.request("POST", self.base + "/login", {"user": "admin", "password": "old"}, headers=other)[0], 303)
+        log = (self.tmp / "auth.log").read_text()
+        self.assertIn("ip=198.51.100.10", log)
+        self.assertIn("ip=198.51.100.11", log)
+        self.assertNotIn("192.0.2.99", log)
+
+    def test_password_flow_revokes_other_sessions_and_persists(self):
+        from awg_panel.config import load_config
+        cookie, session = self.login()
+        _, second = self.login()
+        second.pending_pw = "stale"
+        guest = self.handler.auth.create("127.0.0.1", "guest")
+        form = {"old_password": "old", "new_password": "new % пароль", "new_password2": "new % пароль", "csrf": session.csrf}
+        status, _, body = self.request("POST", self.base + "/password", form, cookie)
+        self.assertEqual(status, 200)
+        self.assertIn((self.base + "/password/confirm").encode(), body)
+        self.assertTrue(self.handler.auth.verify("admin", "old"))
+        self.assertEqual(self.request("POST", self.base + "/password/confirm", {"csrf": session.csrf}, cookie)[0], 200)
+        self.assertEqual(load_config(str(self.config)).users["admin"], "new % пароль")
+        self.assertTrue(self.handler.auth.verify("admin", "new % пароль"))
+        self.assertFalse(self.handler.auth.verify("admin", "old"))
+        self.assertIsNone(self.handler.auth.get(second.sid))
+        self.assertIsNotNone(self.handler.auth.get(guest.sid))
+        self.assertIsNotNone(self.handler.auth.get(session.sid))
+        self.assertIsNone(session.pending_pw)
+
+    def test_password_injection_and_write_failure(self):
+        from unittest.mock import patch
+        cookie, session = self.login()
+        original = self.config.read_bytes()
+        session.pending_pw = "previous"
+        for password in ("pw\nuser.3=evil", " pw ", "pw\x00"):
+            form = {"old_password": "old", "new_password": password, "new_password2": password, "csrf": session.csrf}
+            self.assertEqual(self.request("POST", self.base + "/password", form, cookie)[0], 200)
+            self.assertIsNone(session.pending_pw)
+            self.assertEqual(self.config.read_bytes(), original)
+        session.pending_pw = "new"
+        with patch("awg_panel.server.update_user_password", side_effect=OSError("PRIVATE-MARKER")):
+            _, _, body = self.request("POST", self.base + "/password/confirm", {"csrf": session.csrf}, cookie)
+        self.assertNotIn(b"PRIVATE-MARKER", body)
+        self.assertTrue(self.handler.auth.verify("admin", "old"))
+        self.assertEqual(self.config.read_bytes(), original)
 
 
 if __name__ == "__main__":

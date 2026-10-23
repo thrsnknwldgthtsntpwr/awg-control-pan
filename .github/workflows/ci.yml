@@ -10,9 +10,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Lint (py_compile + shellcheck)
+      - name: Python and Bash checks
         run: |
           python3 -m py_compile src/awg_panel/*.py bin/awg-panel-set-password
-          python3 -m unittest discover -s tests -v
+          python3 -W error::DeprecationWarning -m unittest discover -s tests -v
           bash -n bin/awg-panel-helper
           bash -n packaging/DEBIAN/postinst packaging/DEBIAN/prerm packaging/DEBIAN/postrm build_deb.sh
